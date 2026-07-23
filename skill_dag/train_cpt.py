@@ -87,7 +87,7 @@ def main():
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.bfloat16).cuda()
-    model.gradient_checkpointing_enable()
+    # gradient checkpointing off: 0.9B fits L40S 48GB without it; ~25-30% faster
 
     ds = OrderedPackedDataset(args.schedule, tok, args.seq_len)
     print(f"schedule={os.path.basename(args.schedule)}  tokens/epoch={ds.tokens_per_epoch:,}  "
