@@ -25,6 +25,7 @@ if [ ! -d ../.venv_skilldag ]; then
   python3 -m venv ../.venv_skilldag
 fi
 source ../.venv_skilldag/bin/activate
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 pip install --quiet torch transformers accelerate "huggingface_hub[cli]" wandb
 
 echo "=== snapshot base model (pinned revision, ~3.6 GB) ==="
@@ -48,6 +49,7 @@ cat > phase1_job.sbatch <<EOF
 #SBATCH --output=phase1_out/slurm-%j.out
 nvidia-smi -L || true
 source ../.venv_skilldag/bin/activate
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 set -e
 echo "--- pilot ---"
 python pilot_calibrate.py --model $BASE

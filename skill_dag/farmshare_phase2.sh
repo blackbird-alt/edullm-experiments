@@ -18,6 +18,7 @@ cat > phase2_${s}.sbatch <<JOB
 #SBATCH --mem=32G
 #SBATCH --output=phase2_out/slurm-${s}-%j.out
 source ../.venv_skilldag/bin/activate
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 set -e
 python train_cpt.py --model $BASE --schedule schedules/${s}.idx \
   --token-budget $B --ckpt-tokens $((B/12)) --out runs/${s}
