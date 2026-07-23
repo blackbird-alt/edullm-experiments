@@ -1,0 +1,100 @@
+{
+  "version": "skill_dag_v1",
+  "seed": 20260723,
+  "nodes": {
+    "A": "single-digit addition",
+    "M": "single-digit multiplication",
+    "ADD": "multi-digit addition",
+    "SUB": "multi-digit subtraction",
+    "MUL": "multi-digit multiplication",
+    "DIV": "long division (quotient+remainder)",
+    "FRAC": "fraction addition",
+    "EXPR": "order-of-operations expression",
+    "WORD": "multi-step word problem"
+  },
+  "edges": [
+    [
+      "A",
+      "ADD"
+    ],
+    [
+      "A",
+      "SUB"
+    ],
+    [
+      "M",
+      "MUL"
+    ],
+    [
+      "ADD",
+      "MUL"
+    ],
+    [
+      "MUL",
+      "DIV"
+    ],
+    [
+      "SUB",
+      "DIV"
+    ],
+    [
+      "MUL",
+      "FRAC"
+    ],
+    [
+      "ADD",
+      "FRAC"
+    ],
+    [
+      "ADD",
+      "EXPR"
+    ],
+    [
+      "SUB",
+      "EXPR"
+    ],
+    [
+      "MUL",
+      "EXPR"
+    ],
+    [
+      "DIV",
+      "EXPR"
+    ],
+    [
+      "ADD",
+      "WORD"
+    ],
+    [
+      "SUB",
+      "WORD"
+    ],
+    [
+      "MUL",
+      "WORD"
+    ]
+  ],
+  "tiers": [
+    [
+      "A",
+      "M"
+    ],
+    [
+      "ADD",
+      "SUB",
+      "MUL"
+    ],
+    [
+      "DIV",
+      "FRAC"
+    ],
+    [
+      "EXPR",
+      "WORD"
+    ]
+  ],
+  "fact_skills": [
+    "A",
+    "M"
+  ]
+}

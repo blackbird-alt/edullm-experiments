@@ -1,0 +1,63 @@
+{
+  "dataset_version": "skill_dag_v1",
+  "n_records": 56200,
+  "schedules": {
+    "topo_101": {
+      "type": "topological",
+      "seed": 101,
+      "node_order": [
+        "A",
+        "SUB",
+        "ADD",
+        "M",
+        "MUL",
+        "DIV",
+        "EXPR",
+        "FRAC",
+        "WORD"
+      ]
+    },
+    "topo_102": {
+      "type": "topological",
+      "seed": 102,
+      "node_order": [
+        "A",
+        "SUB",
+        "M",
+        "ADD",
+        "MUL",
+        "WORD",
+        "DIV",
+        "EXPR",
+        "FRAC"
+      ]
+    },
+    "topo_103": {
+      "type": "topological",
+      "seed": 103,
+      "node_order": [
+        "M",
+        "A",
+        "ADD",
+        "SUB",
+        "MUL",
+        "WORD",
+        "DIV",
+        "EXPR",
+        "FRAC"
+      ]
+    },
+    "random_201": {
+      "type": "random",
+      "seed": 201
+    },
+    "random_202": {
+      "type": "random",
+      "seed": 202
+    },
+    "random_203": {
+      "type": "random",
+      "seed": 203
+    }
+  }
+}

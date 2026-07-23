@@ -1,0 +1,74 @@
+{
+  "version": "skill_dag_v1",
+  "seed": 20260723,
+  "train": 56200,
+  "heldout": 7200,
+  "verifier_checked": 3000,
+  "verifier_bad": 0,
+  "per_skill": {
+    "A": {
+      "unique": 100,
+      "train": 100,
+      "test": 100,
+      "overlap": 100,
+      "note": "fact recall: train==eval by design"
+    },
+    "M": {
+      "unique": 100,
+      "train": 100,
+      "test": 100,
+      "overlap": 100,
+      "note": "fact recall: train==eval by design"
+    },
+    "ADD": {
+      "unique": 9000,
+      "train": 8000,
+      "test": 1000,
+      "overlap": 0,
+      "top_answer_share": 0.0019
+    },
+    "SUB": {
+      "unique": 9000,
+      "train": 8000,
+      "test": 1000,
+      "overlap": 0,
+      "top_answer_share": 0.0029
+    },
+    "MUL": {
+      "unique": 9000,
+      "train": 8000,
+      "test": 1000,
+      "overlap": 0,
+      "top_answer_share": 0.0011
+    },
+    "DIV": {
+      "unique": 9000,
+      "train": 8000,
+      "test": 1000,
+      "overlap": 0,
+      "top_answer_share": 0.0017
+    },
+    "FRAC": {
+      "unique": 9000,
+      "train": 8000,
+      "test": 1000,
+      "overlap": 0,
+      "top_answer_share": 0.0171
+    },
+    "EXPR": {
+      "unique": 9000,
+      "train": 8000,
+      "test": 1000,
+      "overlap": 0,
+      "top_answer_share": 0.0067
+    },
+    "WORD": {
+      "unique": 9000,
+      "train": 8000,
+      "test": 1000,
+      "overlap": 0,
+      "top_answer_share": 0.0231
+    }
+  },
+  "leakage": {}
+}
