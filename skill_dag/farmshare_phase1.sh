@@ -25,7 +25,7 @@ if [ ! -d ../.venv_skilldag ]; then
   python3 -m venv ../.venv_skilldag
 fi
 source ../.venv_skilldag/bin/activate
-pip install --quiet torch transformers "huggingface_hub[cli]" wandb
+pip install --quiet torch transformers accelerate "huggingface_hub[cli]" wandb
 
 echo "=== snapshot base model (pinned revision, ~3.6 GB) ==="
 BASE=$HOME/base/olmo-ladder-760m-05xc
