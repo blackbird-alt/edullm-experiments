@@ -65,7 +65,7 @@ def main():
     ap.add_argument("--ckpt-tokens", type=int, default=100_000_000)
     ap.add_argument("--seq-len", type=int, default=1024)
     ap.add_argument("--batch-size", type=int, default=8)
-    ap.add_argument("--lr", type=float, default=3e-5)
+    ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--warmup-steps", type=int, default=100)
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--wandb", default=None,

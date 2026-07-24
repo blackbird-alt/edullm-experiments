@@ -1,5 +1,5 @@
 {
-  "version": "skill_dag_v1",
+  "version": "skill_dag_v2",
   "seed": 20260723,
   "nodes": {
     "A": "single-digit addition",

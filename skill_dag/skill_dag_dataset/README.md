@@ -1,4 +1,4 @@
-# Skill-DAG Stage-1 dataset (`skill_dag_v1`)
+# Skill-DAG Stage-1 dataset (`skill_dag_v2`)
 
 Frozen, reproducible procedural-arithmetic dataset for the P1 **prerequisite-sequencing**
 experiment (topological order vs. random shuffle of the *same* records). The graph is the

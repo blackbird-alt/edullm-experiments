@@ -23,7 +23,7 @@ from fractions import Fraction
 from collections import Counter
 
 SEED = 20260723
-VERSION = "skill_dag_v1"
+VERSION = "skill_dag_v2"  # v2: digit-spaced numbers (chunked BPE cripples arithmetic; see probe)
 random.seed(SEED)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -66,32 +66,37 @@ def sample_int(dmin, dmax):
     return random.randint(lo, hi)
 
 
+def d(n):
+    """Digit-space a number so each digit is its own BPE token: 348 -> '3 4 8'."""
+    return " ".join(str(n))
+
+
 # ---- generators: each returns (prompt, answer) with prompt ending in "= " ----
 def gen_ADD():
     a, b = sample_int(2, 4), sample_int(2, 4)
-    return f"{a} + {b} = ", str(a + b)
+    return f"{d(a)} + {d(b)} = ", d(a + b)
 
 def gen_SUB():
     a, b = sample_int(2, 4), sample_int(2, 4)
     a, b = max(a, b), min(a, b)  # non-negative result; sign is not a hidden extra skill
-    return f"{a} - {b} = ", str(a - b)
+    return f"{d(a)} - {d(b)} = ", d(a - b)
 
 def gen_MUL():
     a, b = sample_int(2, 3), sample_int(2, 2)
-    return f"{a} * {b} = ", str(a * b)
+    return f"{d(a)} * {d(b)} = ", d(a * b)
 
 def gen_DIV():
     v = sample_int(2, 2)                 # divisor 10-99
     q = sample_int(1, 3)                 # quotient
     r = random.randint(0, v - 1)         # remainder < divisor
     dividend = v * q + r
-    return f"{dividend} / {v} = ", f"{q} R {r}"
+    return f"{d(dividend)} / {d(v)} = ", f"{d(q)} R {d(r)}"
 
 def gen_FRAC():
-    b = random.randint(2, 20); d = random.randint(2, 20)
-    a = random.randint(1, b - 1); c = random.randint(1, d - 1)
-    s = Fraction(a, b) + Fraction(c, d)
-    return f"{a}/{b} + {c}/{d} = ", f"{s.numerator}/{s.denominator}"
+    b = random.randint(2, 20); dd_ = random.randint(2, 20)
+    a = random.randint(1, b - 1); c = random.randint(1, dd_ - 1)
+    s = Fraction(a, b) + Fraction(c, dd_)
+    return f"{d(a)}/{d(b)} + {d(c)}/{d(dd_)} = ", f"{d(s.numerator)}/{d(s.denominator)}"
 
 def gen_EXPR():
     # explicit templates so the printed string and the computed value cannot disagree
@@ -99,16 +104,18 @@ def gen_EXPR():
     a, b, c, dd = x(), x(), x(), x()
     t = random.randint(0, 4)
     if t == 0:
-        s, val = f"{a} + {b} * {c}", a + b * c
+        s, val = f"{d(a)} + {d(b)} * {d(c)}", a + b * c
     elif t == 1:
-        s, val = f"{a} * {b} + {c}", a * b + c
+        s, val = f"{d(a)} * {d(b)} + {d(c)}", a * b + c
     elif t == 2:
-        s, val = f"{a} + {b} * ({c} - {dd})", a + b * (c - dd)
+        s, val = f"{d(a)} + {d(b)} * ({d(c)} - {d(dd)})", a + b * (c - dd)
     elif t == 3:
-        s, val = f"({a} + {b}) * {c}", (a + b) * c
+        s, val = f"({d(a)} + {d(b)}) * {d(c)}", (a + b) * c
     else:
-        s, val = f"{a} * ({b} + {c}) - {dd}", a * (b + c) - dd
-    return f"{s} = ", str(val)
+        s, val = f"{d(a)} * ({d(b)} + {d(c)}) - {d(dd)}", a * (b + c) - dd
+    if val < 0:  # negative answers break digit-spacing format; retry (same policy as WORD)
+        return gen_EXPR()
+    return f"{s} = ", d(val)
 
 _NAMES = ["Ada", "Ben", "Cara", "Dev", "Eli", "Fay", "Gus", "Hana", "Ivo", "Jo"]
 _OBJ = ["apples", "books", "coins", "marbles", "cards", "stamps", "beads", "tiles"]
@@ -118,23 +125,23 @@ def gen_WORD():
     a, b, c = random.randint(2, 20), random.randint(2, 12), random.randint(1, 30)
     t = random.randint(0, 4)
     if t == 0:
-        s = f"A store has {a} boxes of {b} {obj}. It sells {c} {obj}. How many {obj} are left? = "
+        s = f"A store has {d(a)} boxes of {d(b)} {obj}. It sells {d(c)} {obj}. How many {obj} are left? = "
         val = a * b - c
     elif t == 1:
-        s = f"{name} reads {a} pages a day for {b} days, then {c} more pages. How many pages in total? = "
+        s = f"{name} reads {d(a)} pages a day for {d(b)} days, then {d(c)} more pages. How many pages in total? = "
         val = a * b + c
     elif t == 2:
-        s = f"{name} has {a} {obj} and buys {b} more, then gives away {c}. How many {obj} remain? = "
+        s = f"{name} has {d(a)} {obj} and buys {d(b)} more, then gives away {d(c)}. How many {obj} remain? = "
         val = a + b - c
     elif t == 3:
-        s = f"There are {a} bags with {b} {obj} each. {name} adds {c} loose {obj}. How many {obj} total? = "
+        s = f"There are {d(a)} bags with {d(b)} {obj} each. {name} adds {d(c)} loose {obj}. How many {obj} total? = "
         val = a * b + c
     else:
-        s = f"{name} shares {a * b} {obj} equally among {b} friends. How many {obj} does each friend get? = "
+        s = f"{name} shares {d(a * b)} {obj} equally among {d(b)} friends. How many {obj} does each friend get? = "
         val = a  # a*b shared among b -> a each (exact by construction)
     if val < 0:  # keep non-negative; retry via recursion (rare)
         return gen_WORD()
-    return s, str(val)
+    return s, d(val)
 
 
 GENERATORS = {"ADD": gen_ADD, "SUB": gen_SUB, "MUL": gen_MUL, "DIV": gen_DIV,
@@ -164,7 +171,7 @@ def build_facts(skill):
     for a in range(10):
         for b in range(10):
             val = a + b if skill == "A" else a * b
-            recs.append((f"{a} {op} {b} = ", str(val)))
+            recs.append((f"{a} {op} {b} = ", d(val)))
     return recs  # train == eval set (recall)
 
 
@@ -210,8 +217,13 @@ def main():
         json.dump(DAG, f, indent=2)
 
     # ---- verifier: independently re-check a random sample of answers ----
+    import re as _re
+    def _unspace(t):
+        while _re.search(r"(?<=\d) (?=\d)", t):
+            t = _re.sub(r"(?<=\d) (?=\d)", "", t)
+        return t
     def verify(rec):
-        s, ans = rec["prompt"], rec["answer"]
+        s, ans = _unspace(rec["prompt"]), _unspace(rec["answer"])
         sk = rec["skill"]
         try:
             if sk in ("A", "M", "ADD", "SUB", "MUL"):
