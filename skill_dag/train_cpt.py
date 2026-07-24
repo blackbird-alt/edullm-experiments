@@ -31,29 +31,48 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "skill_dag_dataset")
 
 
-class OrderedPackedDataset(Dataset):
-    """Packs record texts into fixed-length blocks IN SCHEDULE ORDER."""
+class OrderedRecordDataset(Dataset):
+    """v3: one record per example IN SCHEDULE ORDER, loss on ANSWER tokens only.
 
-    def __init__(self, schedule_path, tokenizer, seq_len):
+    v2 post-mortem: packed full-loss CLM at 80 epochs memorized the stream
+    verbatim (train loss 0.011) with ~0 bare-prompt extraction -- the Allen-Zhu
+    "memorized but not extractable" failure. Per-example answer-masked loss
+    removes the memorizable mega-context and puts every gradient on the mapping.
+    """
+
+    def __init__(self, schedule_path, tokenizer, seq_len=None):
         with open(os.path.join(DATA, "train.jsonl")) as f:
-            texts = [json.loads(l)["text"] for l in f]
+            recs = [json.loads(l) for l in f]
         with open(schedule_path) as f:
             order = [int(x) for x in f.read().split()]
         eos = tokenizer.eos_token_id
-        ids = []
+        self.examples = []
         for idx in order:
-            ids.extend(tokenizer(texts[idx], add_special_tokens=False)["input_ids"])
-            ids.append(eos)  # record separator
-        n_blocks = len(ids) // seq_len
-        self.blocks = [ids[i * seq_len : (i + 1) * seq_len] for i in range(n_blocks)]
-        self.tokens_per_epoch = n_blocks * seq_len
+            r = recs[idx]
+            p_ids = tokenizer(r["prompt"].rstrip(), add_special_tokens=False)["input_ids"]
+            a_ids = tokenizer(" " + r["answer"], add_special_tokens=False)["input_ids"] + [eos]
+            ids = p_ids + a_ids
+            labels = [-100] * len(p_ids) + a_ids[:]
+            self.examples.append((ids, labels))
+        self.tokens_per_epoch = sum(len(e[0]) for e in self.examples)
 
     def __len__(self):
-        return len(self.blocks)
+        return len(self.examples)
 
     def __getitem__(self, i):
-        x = torch.tensor(self.blocks[i], dtype=torch.long)
-        return {"input_ids": x, "labels": x.clone()}
+        return self.examples[i]
+
+
+def collate(batch, pad_id):
+    n = max(len(ids) for ids, _ in batch)
+    input_ids, labels, mask = [], [], []
+    for ids, lab in batch:
+        d = n - len(ids)
+        input_ids.append(ids + [pad_id] * d)
+        labels.append(lab + [-100] * d)
+        mask.append([1] * len(ids) + [0] * d)
+    return {"input_ids": torch.tensor(input_ids), "labels": torch.tensor(labels),
+            "attention_mask": torch.tensor(mask)}
 
 
 def main():
@@ -64,10 +83,10 @@ def main():
     ap.add_argument("--token-budget", type=int, required=True)
     ap.add_argument("--ckpt-tokens", type=int, default=100_000_000)
     ap.add_argument("--seq-len", type=int, default=1024)
-    ap.add_argument("--batch-size", type=int, default=8)
+    ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--warmup-steps", type=int, default=100)
-    ap.add_argument("--grad-accum", type=int, default=4)
+    ap.add_argument("--grad-accum", type=int, default=1)
     ap.add_argument("--wandb", default=None,
                     help="optional W&B project (e.g. eduLLM/skill-dag); run name = schedule name")
     args = ap.parse_args()
@@ -89,31 +108,34 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.bfloat16).cuda()
     # gradient checkpointing off: 0.9B fits L40S 48GB without it; ~25-30% faster
 
-    ds = OrderedPackedDataset(args.schedule, tok, args.seq_len)
+    ds = OrderedRecordDataset(args.schedule, tok)
     print(f"schedule={os.path.basename(args.schedule)}  tokens/epoch={ds.tokens_per_epoch:,}  "
           f"budget={args.token_budget:,}  (~{args.token_budget / ds.tokens_per_epoch:.1f} epochs)")
-    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, drop_last=True)  # shuffle=False is the experiment
+    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, drop_last=False,
+                        collate_fn=lambda b: collate(b, tok.pad_token_id))  # shuffle=False is the experiment
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.1, betas=(0.9, 0.95))
     sched = get_constant_schedule_with_warmup(opt, num_warmup_steps=args.warmup_steps)
 
-    tokens_per_step = args.batch_size * args.seq_len * args.grad_accum
     trained_tokens, next_ckpt, step = 0, args.ckpt_tokens, 0
     log_path = os.path.join(args.out, "train_log.jsonl")
     t0 = time.time()
 
     model.train()
+    step_tokens = 0
     done = False
     while not done:  # epochs over the same ordered stream
         for i, batch in enumerate(loader):
             batch = {k: v.cuda() for k, v in batch.items()}
             loss = model(**batch).loss / args.grad_accum
             loss.backward()
+            step_tokens += int(batch["attention_mask"].sum())
             if (i + 1) % args.grad_accum == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step(); sched.step(); opt.zero_grad(set_to_none=True)
                 step += 1
-                trained_tokens += tokens_per_step
+                trained_tokens += step_tokens
+                step_tokens = 0
                 if step % 50 == 0:
                     rec = {"step": step, "tokens": trained_tokens,
                            "loss": round(loss.item() * args.grad_accum, 4),

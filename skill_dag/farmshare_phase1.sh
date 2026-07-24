@@ -56,13 +56,13 @@ python pilot_calibrate.py --model $BASE
 echo "--- smoke run (200M tokens) ---"
 python train_cpt.py --model $BASE \\
   --schedule schedules/random_201.idx --token-budget 100000000 \\
-  --ckpt-tokens 10000000 --out runs/smoke_v2_random201
+  --ckpt-tokens 10000000 --out runs/smoke_v3_random201
 echo "--- eval smoke checkpoints ---"
-python eval_mastery.py --run runs/smoke_v2_random201
+python eval_mastery.py --run runs/smoke_v3_random201
 echo "--- collecting results ---"
 cp pilot_results.json phase1_out/
-cp runs/smoke_v2_random201/eval_log.jsonl phase1_out/
-cp runs/smoke_v2_random201/train_log.jsonl phase1_out/
+cp runs/smoke_v3_random201/eval_log.jsonl phase1_out/
+cp runs/smoke_v3_random201/train_log.jsonl phase1_out/
 echo "PHASE 1 COMPLETE - send back the 3 files in skill_dag/phase1_out/"
 EOF
 # FarmShare's gpu partition historically requires --qos=gpu; try with it, fall back without

@@ -1,7 +1,7 @@
 # Preregistration — P1 Skill-DAG / Prerequisite Sequencing
 
 Status: DRAFT for P8 registry. File before any main-run GPU spend.
-Dataset: `skill_dag_v2` (frozen, SEED=20260723; v2 = digit-spaced numbers after v1 smoke showed chunked-BPE numbers prevent arithmetic learning — near-miss generations, teacher-forced argmax 0.33-0.60). Schedules: `schedules/` (frozen, verified).
+v3 training recipe: per-example, loss on ANSWER tokens only (v2 packed full-loss CLM memorized the stream verbatim, loss 0.011, ~0 bare extraction = Allen-Zhu memorized-not-extractable). Dataset skill_dag_v2 (digit-spaced) unchanged.
 
 ## Question
 At ~1B scale, does training in prerequisite (topological) order reach mastery in fewer
