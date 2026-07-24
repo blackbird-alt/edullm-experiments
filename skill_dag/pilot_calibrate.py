@@ -57,7 +57,7 @@ def main():
         correct = 0
         for i in range(0, len(recs), args.batch_size):
             batch = recs[i : i + args.batch_size]
-            prompts = [r["prompt"] for r in batch]
+            prompts = [r["prompt"].rstrip() for r in batch]  # trailing space is OOD: BPE glues it to the answer token in training
             enc = tok(prompts, return_tensors="pt", padding=True, padding_side="left").to(model.device)
             with torch.no_grad():
                 out = model.generate(

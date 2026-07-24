@@ -40,7 +40,7 @@ def eval_checkpoint(path, by_skill, batch_size, max_new_tokens):
         hits = []
         for i in range(0, len(recs), batch_size):
             batch = recs[i : i + batch_size]
-            enc = tok([r["prompt"] for r in batch], return_tensors="pt",
+            enc = tok([r["prompt"].rstrip() for r in batch], return_tensors="pt",  # rstrip: see pilot
                       padding=True, padding_side="left").to(model.device)
             with torch.no_grad():
                 gen = model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False,
