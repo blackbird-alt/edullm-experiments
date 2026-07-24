@@ -45,7 +45,7 @@ Per-skill mastery curves; final accuracy per skill per arm; prerequisite-skill f
   skill) jointly; analyzer verified on synthetic effect (KEEP) and null (INCONCLUSIVE) data.
 
 ## Token budget
-Set after the pilot (pilot_calibrate.py + a short smoke run): the budget is the smallest
+Set from the v3 calibration smoke to 100M tokens per run (learning plateaus by then). Primary mastery threshold 0.80. NOTE: difficulties are bimodal - A/M/ADD/SUB/WORD master fast, FRAC/EXPR climb, MUL/DIV stay ~0.20 (bare-answer multi-digit mult is the known-hard case; needs the worked-examples lever). Censored skills reported, not excluded silently.
 round number at which the random arm reaches 90% on all nine skills, plus 25% margin.
 Budget is fixed before the six main runs launch and recorded in run_config.json.
 If any skill floors at bare-answer format in the smoke run, its difficulty ranges are
