@@ -58,7 +58,7 @@ python train_cpt.py --model $BASE \\
   --schedule schedules/random_201.idx --token-budget 100000000 \\
   --ckpt-tokens 10000000 --out runs/smoke_v2_random201
 echo "--- eval smoke checkpoints ---"
-python eval_mastery.py --run runs/smoke_random201
+python eval_mastery.py --run runs/smoke_v2_random201
 echo "--- collecting results ---"
 cp pilot_results.json phase1_out/
 cp runs/smoke_v2_random201/eval_log.jsonl phase1_out/
