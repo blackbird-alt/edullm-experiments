@@ -1,0 +1,7 @@
+# Shell scripts must stay LF even when checked out on Windows. With core.autocrlf=true
+# git would otherwise hand the cluster a CRLF shebang, and Linux reports
+# "bad interpreter: /bin/bash^M".
+*.sh text eol=lf
+
+# Same reasoning for anything else executed on the cluster.
+*.sbatch text eol=lf

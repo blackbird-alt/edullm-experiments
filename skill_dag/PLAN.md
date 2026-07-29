@@ -61,7 +61,7 @@ above all item 13, which is the one way this design could still manufacture a nu
 
 Ranked by how much compute is wasted if the assumption is wrong. Items 2–4 are
 discrepancies against OLMo-1B's *actual* training config
-(`configs/official/OLMo-1B.yaml`, v0.2.5). Items 13–17 came from checking this plan against
+(`configs/official/OLMo-1B.yaml`, v0.2.5). Items 13–18 came from checking this plan against
 the original proposal doc; **item 13 is the single highest-severity item on the list** and
 should be read first — it can null the experiment by construction.
 
@@ -196,7 +196,18 @@ should be read first — it can null the experiment by construction.
    compute against 490 GPU-h — and it is the one addition that would speak to the doc's own
    stated gap. DataDecide supplies the task list and shows that character-normalised
    likelihood metrics carry signal at small scale where raw accuracy does not.
-17. **T-LITE's candidate selection is offered by the doc and is not implemented.** The doc
+17. **What the adaptive arms start from is unspecified, and it changes what arms 4/5 test.**
+  The doc says arms 4 and 5 "select optimal domain weight to start, and then adjust the
+   weights 5 times throughout pre-training according to the skill-it formula." It never says
+   what "optimal to start" means. Two readings: start at the **natural** mix, so arms 4/5
+   test Skill-It reweighting alone; or start at **arm 2's fitted optimum**, so they test
+   Skill-It *on top of* RegMix. The second makes 4-vs-2 a clean test of "does adapting help
+   beyond a good fixed choice," but it also means arms 4/5 inherit the whole 96-run fleet
+   cost and are no longer independent of arm 2. `farmshare_phase3_main.sh` defaults to
+   natural and exposes `ADAPTIVE_INIT` for the alternative. This interacts with item 13: if
+   A is degenerate the adaptive arms never move, so whichever start is chosen is *also* the
+   final answer, and arms 4/5 silently become a duplicate of arm 1 or arm 2.
+18. **T-LITE's candidate selection is offered by the doc and is not implemented.** The doc
   says arm 5 may "optionally mirror T-LITE's candidate selection as well: for each skill,
    only probe the top-N candidate prerequisite clusters by the derivative estimate." Nothing
    in `fit_aij.py` does this — arm 5 probes all 10 cluster pairs. It is marked optional in
@@ -451,6 +462,25 @@ scanning c and solving the linearised form. Also emits the `t` matrix arm 5 clus
 non-inferiority test against a preregistered margin, fitting compute reported separately.
 - `PREREG.md` — to file before any main-run spend.
 
+Operational layer (written, cluster-untested):
+
+- `README.md` — arms, pipeline order, producer→consumer table, do-not-fix list.
+- `RUNBOOK.md` — phased operating instructions for whoever holds the GPUs.
+- `requirements.txt` — pinned floors; torch must be installed first against the cluster's
+CUDA. LightGBM is listed but optional, since `fit_regmix.py` falls back and records which
+regressor ran.
+- `farmshare_phase0_prep.sh` — CPU: estimate table, then build the pools.
+- `farmshare_phase1_smoke.sh` — the short GPU run, including a resume round-trip check.
+- `farmshare_phase2_fit.sh` — submitter that wires the real dependency graph: fleet and
+arm-4 probe in parallel, then the CPU fitters and clusterer, then the arm-5 probe. Refuses
+to run until item 13 is acknowledged.
+- `farmshare_phase3_main.sh` — Slurm array over the 15 main runs, resume-safe.
+
+Every `--flag` in these was machine-checked against the scripts' argparse definitions
+(one real error caught: `--nproc` does not exist, the flag is `--procs`). `.gitattributes`
+pins `*.sh` to LF so a Windows checkout cannot ship a CRLF shebang to the cluster. **Bash
+syntax is unverified** — no bash on the authoring machine.
+
 **All testing so far has been synthetic data on CPU.** No script has run against a real GPU,
 the real model, or real tokens. What is verified is that the maths recovers known planted
 answers and that each script's output format is what the next one reads. What is *not*
@@ -519,7 +549,7 @@ which biases every entry of A negative; the Skill-It clip then zeroes them and a
 silently reproduce their starting weights. That is a null result manufactured by the
 estimator, and it looks exactly like a real one. Nothing else on this list can invalidate
 the experiment so completely or so quietly. The fix costs about 10 extra GPU-h.
-- **The other 16 review questions.** Items 2–4 (batch size, mid-warmup branch point,
+- **The other 17 review questions.** Items 2–4 (batch size, mid-warmup branch point,
 constant LR) and item 11 (bf16 optimiser state) are design decisions, not bugs; no amount
 of code changes them. Getting them wrong wastes the full ~525 GPU-h.
 - **Items 5 and 12 are the two that DataDecide turned from open questions into arguable

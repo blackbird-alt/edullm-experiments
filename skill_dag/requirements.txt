@@ -1,0 +1,25 @@
+# Skill-DAG experiment dependencies.
+#
+# Install torch FIRST, matched to the cluster's CUDA version, from
+# https://pytorch.org/get-started/locally/ -- the PyPI default wheel may not
+# match the driver on your nodes. Then: pip install -r requirements.txt
+
+# --- required ---
+torch>=2.1.0
+transformers>=4.40.0        # OLMo architecture support (OlmoForCausalLM) landed in 4.40
+numpy>=1.24.0
+requests>=2.31.0            # prep_dolma_domains.py shard fetching
+scikit-learn>=1.3.0         # fit_regmix.py gradient-boosting and ridge fallbacks
+
+# --- optional ---
+# lightgbm is the doc-specified regressor for arm 2. fit_regmix.py falls back to
+# sklearn's GradientBoostingRegressor and then to ridge, and records which one ran,
+# so the pipeline works without it -- but arm 2 is then not the doc's method.
+lightgbm>=4.0.0
+
+# Progress/metric logging. train_mixture.py --wandb is opt-in; JSONL logs are
+# always written regardless, so this is not needed for a valid run.
+wandb>=0.16.0
+
+# Needed only for the one-time base-model snapshot in RUNBOOK.md step 1.
+huggingface_hub[cli]>=0.23.0
