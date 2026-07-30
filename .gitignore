@@ -6,4 +6,12 @@ skill_dag/dolma_domains/
 skill_dag/runs/
 skill_dag/fleet/
 skill_dag/aij_*/
+skill_dag/phase*_out/
 *.npy
+
+# Fitted artifacts. Regenerable from fleet.jsonl / probes.jsonl, and results belong in
+# the writeup rather than in the tree.
+skill_dag/weights_arm*.json
+skill_dag/clusters*.json
+skill_dag/mixlaw_t.json
+skill_dag/analysis*.json

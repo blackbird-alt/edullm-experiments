@@ -25,9 +25,49 @@ run-level variance -- with 2 seeds the interval is barely meaningful and that is
 
 Usage:
   python analyze.py --runs runs/arm1_* runs/arm2_* runs/arm3_* runs/arm4_* runs/arm5_* \
-      --margin 0.01 --out analysis.json
+      --margin 0.01 --out analysis.json \
+      --fitting-costs aij_arm4/aij.json aij_arm5/aij.json fleet/fleet_cost.json
 """
 import argparse, glob, json, os, random, re
+
+
+def load_fitting_costs(specs):
+    """-> {label: gpu_hours}, read straight from the fitters' own artifacts.
+
+    Accepts `aij.json` / `fleet_cost.json` (which carry a `fitting_compute` block), a flat
+    {label: gpu_hours} json, or `label=path` to override the label.
+
+    Entries are labelled by their source file, not by arm, because the mapping is a
+    preregistration decision rather than a fact about the files: one proxy fleet serves
+    both arm 2 and arm 3, and whether arm 5 is charged for it is review item 13/14 in
+    PLAN.md. Deciding that here would quietly answer a question that is still open.
+    """
+    out = {}
+    for spec in specs:
+        label, _, path = spec.rpartition("=")
+        if not os.path.exists(path):
+            raise SystemExit(f"--fitting-costs: no such file: {path}")
+        blob = json.load(open(path))
+        if not isinstance(blob, dict):
+            raise SystemExit(f"--fitting-costs: {path} is not a json object")
+        fc = blob.get("fitting_compute")
+        if isinstance(fc, dict):
+            if not label:
+                parent = os.path.basename(os.path.dirname(os.path.abspath(path)))
+                label = parent or os.path.splitext(os.path.basename(path))[0]
+            hours = fc.get("gpu_hours")
+            if hours is None:
+                raise SystemExit(f"--fitting-costs: {path} has no fitting_compute.gpu_hours")
+            if label in out:
+                raise SystemExit(f"--fitting-costs: duplicate label {label!r}; "
+                                 f"disambiguate with label={path}")
+            out[label] = hours
+        elif all(isinstance(v, (int, float)) for v in blob.values()):
+            out.update(blob)
+        else:
+            raise SystemExit(f"--fitting-costs: {path} is neither a fitter artifact "
+                             f"(no fitting_compute block) nor a flat label->hours map")
+    return out
 
 
 def load_run(d):
@@ -147,8 +187,10 @@ def main():
     ap.add_argument("--targets", type=int, default=8, help="loss targets to sweep")
     ap.add_argument("--boot", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--fitting-costs", default=None,
-                    help="json {arm: gpu_hours} from the fitters, reported separately")
+    ap.add_argument("--fitting-costs", nargs="+", default=None,
+                    help="the fitters' own artifacts (aij.json, fleet_cost.json) or a flat "
+                         "{label: gpu_hours} json; use label=path to rename. Reported "
+                         "separately, never pooled with training compute.")
     ap.add_argument("--baseline-arm", default=None,
                     help="arm treated as the fixed-weight reference (default: lowest arm id)")
     ap.add_argument("--out", default="analysis.json")
@@ -221,11 +263,15 @@ def main():
         print(f"  {a:>8}: median ratio {med:5.3f}  non-inferior at {ni}/{len(cs)} targets, "
               f"superior at {sup}/{len(cs)}")
 
-    fitting = json.load(open(args.fitting_costs)) if args.fitting_costs else {}
+    fitting = load_fitting_costs(args.fitting_costs) if args.fitting_costs else {}
     if fitting:
+        w = max(len(a) for a in fitting)
         print("\n=== fitting compute (NOT pooled with training) ===")
         for a in sorted(fitting):
-            print(f"  {a:>8}: {fitting[a]} GPU-h to choose its weights")
+            print(f"  {a:>{w}}: {fitting[a]} GPU-h")
+        print(f"  {'total':>{w}}: {round(sum(fitting.values()), 2)} GPU-h")
+        print("  labelled by source: the fleet is shared by arms 2 and 3, and how arm 5 is "
+              "charged for it is PLAN.md item 14")
 
     json.dump({
         "arms": arms, "baseline": base, "n_runs": len(runs),
