@@ -87,18 +87,32 @@ wall-clock number before anyone commits to Phase 3.
 **Blocked on the review questions above.** Once they are settled:
 
 ```bash
-sbatch farmshare_phase2_fit.sh
+NSHARDS=8 I_HAVE_SETTLED_ITEM_13=yes bash farmshare_phase2_fit.sh
 ```
 
-This chains the dependency correctly: the 96-run proxy fleet and the 45-run arm-4 probe
-start in parallel; when the fleet finishes, the two CPU fitters and the clusterer run; then
-the 10-run arm-5 probe starts.
+Note `bash`, not `sbatch` — this one is a submitter you run on the login node, and it
+refuses to do anything until item 13 is acknowledged. It chains the dependencies: the
+96-run proxy fleet and the 45-run arm-4 probe start in parallel, each as a Slurm array;
+when the fleet is merged, the two CPU fitters and the clusterer run; then the 10-run arm-5
+probe starts.
 
-Both `fit_proxy_fleet.py` and `fit_aij.py` loop over their runs **sequentially** in one
-process and append to a JSONL as they go, skipping completed work on restart. So if the job
-hits the Slurm time limit, just resubmit — it picks up where it stopped. They do not shard
-across nodes; parallelising them would need a `--shard/--shard-index` flag that does not
-exist yet.
+`NSHARDS` is how many GPUs to spread each array over. Set it to what you can realistically
+hold at once. Sequentially the fleet is about 20 h of wall clock and arm 4 about 13 h; at
+`NSHARDS=8` both come down to a couple of hours. `NSHARDS=1` gives the old single-process
+behaviour. Arm 5 only has 10 probes, so it is capped at 10 tasks however high you set this.
+Two other knobs: `GPU_TIME` (default `48:00:00`, worth lowering when `NSHARDS` is large so
+the jobs get backfilled sooner) and `THROTTLE` (e.g. `THROTTLE=%4` to cap concurrent array
+tasks on a busy partition).
+
+Each array task runs every Nth probe and appends to its own `*.shardNN.jsonl`; a short CPU
+job afterwards merges those into the canonical `fleet.jsonl` / `probes.jsonl` and writes
+`aij.json`. The merge is a separate job on purpose — on a shared filesystem the
+last-finishing task cannot be relied on to see its siblings' final writes.
+
+Everything is resumable at run granularity, so a task killed by the time limit loses at
+most the one probe it was in the middle of. Resubmit the same command and completed runs
+are skipped. If a merge job reports outstanding runs, refill the gaps by resubmitting the
+array, then rerun the merge alone with `--assemble-only`.
 
 Sanity check before trusting the output:
 

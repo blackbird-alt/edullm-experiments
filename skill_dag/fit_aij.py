@@ -25,11 +25,19 @@ preregistered success bar compares fitting cost across methods.
 Resumable: each probe's result is appended to <out>/probes.jsonl and re-runs skip
 completed probes.
 
+Shardable: --shard I --num-shards N runs only every Nth probe, so the 45 runs can be
+spread over N GPUs instead of taken sequentially. Each worker appends to its own
+probes.shardNN.jsonl (concurrent appends to one file on a shared filesystem interleave
+and corrupt lines). A_ij needs every probe, so aij.json is written only once all of them
+are present; --assemble-only does that merge without training.
+
 Usage:
   python fit_aij.py --out aij_arm4                        # 45 runs, domain level
   python fit_aij.py --out aij_arm5 --cluster-map clusters.json   # 10 runs, cluster level
+  python fit_aij.py --out aij_arm4 --shard 3 --num-shards 8      # one worker of eight
+  python fit_aij.py --out aij_arm4 --assemble-only               # after the array finishes
 """
-import argparse, itertools, json, os, time
+import argparse, glob, itertools, json, os, time
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
@@ -37,6 +45,79 @@ from transformers import AutoConfig, AutoModelForCausalLM
 from train_mixture import BASE_MODEL, BASE_REVISION, DomainPools, val_loss
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+# ---------------------------------------------------------------------------
+# sharding, shared with fit_proxy_fleet.py
+# ---------------------------------------------------------------------------
+
+def add_shard_args(ap):
+    ap.add_argument("--shard", type=int, default=0,
+                    help="0-based index of this worker within --num-shards")
+    ap.add_argument("--num-shards", type=int, default=1,
+                    help="split the run list across this many workers/GPUs")
+    ap.add_argument("--assemble-only", action="store_true",
+                    help="train nothing; merge the shard logs and write the final artifact")
+
+
+def select_shard(tasks, shard, num_shards):
+    """Round-robin so each worker gets a mix of cheap and expensive runs."""
+    if num_shards < 1 or not 0 <= shard < num_shards:
+        raise SystemExit(f"--shard must be in [0,{num_shards}); got {shard}")
+    return [t for i, t in enumerate(tasks) if i % num_shards == shard]
+
+
+def shard_log_path(out, stem, shard, num_shards):
+    name = f"{stem}.jsonl" if num_shards == 1 else f"{stem}.shard{shard:02d}.jsonl"
+    return os.path.join(out, name)
+
+
+def log_files(out, stem):
+    return sorted(glob.glob(os.path.join(out, f"{stem}.jsonl"))
+                  + glob.glob(os.path.join(out, f"{stem}.shard*.jsonl")))
+
+
+def read_logs(out, stem, key):
+    """Every worker's records, keyed so re-runs and merged copies collapse."""
+    recs = {}
+    for p in log_files(out, stem):
+        with open(p) as f:
+            for line in f:
+                if line.strip():
+                    r = json.loads(line)
+                    recs[key(r)] = r
+    return recs
+
+
+def merge_logs(out, stem, recs):
+    """Fold the shard logs into the canonical <stem>.jsonl that downstream scripts read.
+
+    Returns the source filenames: the merging process is usually a separate --assemble-only
+    job whose own --num-shards says nothing about how the work was actually split, so the
+    artifact records these instead.
+    """
+    sources = [os.path.basename(p) for p in log_files(out, stem)]
+    path = os.path.join(out, f"{stem}.jsonl")
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w") as f:
+        for r in recs.values():
+            f.write(json.dumps(r) + "\n")
+    os.replace(tmp, path)
+    return sources
+
+
+def write_json_atomic(obj, path):
+    """Shards can finish together; a torn write would poison the artifact."""
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=2)
+    os.replace(tmp, path)
+
+
+def total_cost(recs):
+    secs = sum(r["cost"]["seconds"] for r in recs)
+    toks = sum(r["cost"]["tokens"] for r in recs)
+    return round(secs, 1), toks
 
 
 def make_proxy(base, revision, hidden, layers, seed, device):
@@ -121,6 +202,7 @@ def main():
     ap.add_argument("--grad-checkpoint", action="store_true",
                     help="enable gradient checkpointing; off by default because the proxies "
                          "are small enough not to need it")
+    add_shard_args(ap)
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -149,30 +231,41 @@ def main():
     print(f"level={level}  units={k}  probes={len(tasks)} "
           f"({k} singles + {k*(k-1)//2} pairs)")
     print(f"probe_tokens={args.probe_tokens:,}  proxy hidden={args.hidden} "
-          f"layers={args.layers}\n")
+          f"layers={args.layers}")
+    if args.num_shards > 1:
+        print(f"shard {args.shard}/{args.num_shards}")
+    print()
 
-    # resume
-    done, log_p = {}, os.path.join(args.out, "probes.jsonl")
-    if os.path.exists(log_p):
-        for line in open(log_p):
-            r = json.loads(line)
-            done[tuple(r["units"])] = r
+    log_key = lambda r: tuple(r["units"])
+    done = read_logs(args.out, "probes", log_key)
+    if done:
         print(f"resuming: {len(done)}/{len(tasks)} probes already done\n")
 
-    fit_seconds, fit_tokens = 0.0, 0
-    for n, (kind, us) in enumerate(tasks, 1):
-        if tuple(us) in done:
-            fit_seconds += done[tuple(us)]["cost"]["seconds"]
-            fit_tokens += done[tuple(us)]["cost"]["tokens"]
-            continue
-        print(f"[{n}/{len(tasks)}] {kind}: {'+'.join(us)}", flush=True)
-        vl, cost = probe(list(us), unit_members, pools, args, dev)
-        rec = {"kind": kind, "units": list(us), "val_loss": vl, "cost": cost}
-        with open(log_p, "a") as f:
-            f.write(json.dumps(rec) + "\n")
-        done[tuple(us)] = rec
-        fit_seconds += cost["seconds"]; fit_tokens += cost["tokens"]
-        print(f"    mean val loss {vl['_mean']:.4f}  ({cost['seconds']:.0f}s)", flush=True)
+    if not args.assemble_only:
+        mine = select_shard(tasks, args.shard, args.num_shards)
+        log_p = shard_log_path(args.out, "probes", args.shard, args.num_shards)
+        for n, (kind, us) in enumerate(mine, 1):
+            if tuple(us) in done:
+                continue
+            print(f"[{n}/{len(mine)}] {kind}: {'+'.join(us)}", flush=True)
+            vl, cost = probe(list(us), unit_members, pools, args, dev)
+            rec = {"kind": kind, "units": list(us), "val_loss": vl, "cost": cost}
+            with open(log_p, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+            done[tuple(us)] = rec
+            print(f"    mean val loss {vl['_mean']:.4f}  ({cost['seconds']:.0f}s)",
+                  flush=True)
+        done = read_logs(args.out, "probes", log_key)   # pick up sibling shards
+
+    # A_ij is only defined once every probe exists, so a shard that finishes with others
+    # still running stops here rather than writing a half-built matrix.
+    missing = [us for _, us in tasks if tuple(us) not in done]
+    if missing:
+        print(f"\n{len(done)}/{len(tasks)} probes done, {len(missing)} outstanding "
+              f"(next: {'+'.join(missing[0])}).")
+        print(f"Run --assemble-only once the rest finish to write {args.out}/aij.json.")
+        return
+    sources = merge_logs(args.out, "probes", done)
 
     # ---- assemble A ----
     def unit_loss(rec, u):
@@ -193,16 +286,20 @@ def main():
     A_norm = {i: {j: A[i][j] / mx for j in A[i]} for i in A}
 
     pos = sum(1 for r in A_norm.values() for v in r.values() if v > 0)
+    # summed over every probe, not just this worker's, so the preregistered fitting-cost
+    # comparison is unaffected by how the work was split
+    fit_seconds, fit_tokens = total_cost(done.values())
     out = {
         "level": level, "units": units, "unit_members": unit_members,
         "A": A_norm, "A_raw": A, "normaliser": mx, "loss_alone": alone,
         "n_probes": len(tasks),
-        "fitting_compute": {"seconds": round(fit_seconds, 1), "tokens": fit_tokens,
+        "fitting_compute": {"seconds": fit_seconds, "tokens": fit_tokens,
                             "gpu_hours": round(fit_seconds / 3600, 2),
                             "note": "fitting only; excluded from main-run training compute"},
         "config": vars(args),
+        "shard_logs": sources,
     }
-    json.dump(out, open(os.path.join(args.out, "aij.json"), "w"), indent=2)
+    write_json_atomic(out, os.path.join(args.out, "aij.json"))
 
     print(f"\n=== A ({level} level, normalised) ===")
     w = max(len(u) for u in units)

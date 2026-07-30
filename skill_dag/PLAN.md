@@ -446,11 +446,13 @@ total bytes.
 the DV; 5 reweighting rounds; cluster mode for arm 5; disjoint per-seed read offsets;
 checkpoint/resume; pool-exhaustion warnings. Skill-It mirror descent unit-tested.
 - `fit_aij.py` — arm 4 full pairwise (45 runs at k=9), arm 5 cluster-level (10 runs at K=4).
-Fresh identically-seeded proxy per probe. Records fitting compute separately.
+Fresh identically-seeded proxy per probe. Records fitting compute separately. Shardable
+across GPUs via `--shard/--num-shards`, with `--assemble-only` to merge.
 - `cluster_tlite.py` — k-means (k-means++ seeding, 25 restarts) over behavioural signatures
 from the arm-3 mixing-law fit, not topic embeddings. Verified to recover planted structure.
 - `fit_proxy_fleet.py` — 32 Dirichlet mixtures x 3 sizes, loss curves recorded at 5 points
-per run for power-law extrapolation. Mixtures drawn around the natural mix.
+per run for power-law extrapolation. Mixtures drawn around the natural mix. Shardable on the
+same interface as `fit_aij.py`.
 - `extrapolate.py` — shared power-law fits (over tokens, then over model size), with guards:
 falls back to last-observed when r2 < 0.5 or implied gain > 40%, and restricts weight search
 to the per-domain range the fleet actually visited.
@@ -472,8 +474,10 @@ regressor ran.
 - `farmshare_phase0_prep.sh` — CPU: estimate table, then build the pools.
 - `farmshare_phase1_smoke.sh` — the short GPU run, including a resume round-trip check.
 - `farmshare_phase2_fit.sh` — submitter that wires the real dependency graph: fleet and
-arm-4 probe in parallel, then the CPU fitters and clusterer, then the arm-5 probe. Refuses
-to run until item 13 is acknowledged.
+arm-4 probe as parallel Slurm arrays, each followed by a merge job, then the CPU fitters and
+clusterer, then the arm-5 array. `NSHARDS` sets the GPU width; at 8 the fitting phase drops
+from ~20 h of sequential wall clock to a couple of hours. Refuses to run until item 13 is
+acknowledged.
 - `farmshare_phase3_main.sh` — Slurm array over the 15 main runs, resume-safe.
 
 Every `--flag` in these was machine-checked against the scripts' argparse definitions

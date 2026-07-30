@@ -34,12 +34,12 @@ output file.
 |---|---|---|---|
 | 0 | `prep_dolma_domains.py` | CPU, ~87 GB download | `dolma_domains/` uint16 pools + natural weights |
 | 1 | *smoke test* (RUNBOOK step 3) | GPU, minutes | first contact with the real model |
-| 2a | `fit_proxy_fleet.py` | GPU, 96 runs | `fleet/fleet.jsonl` |
-| 2b | `fit_aij.py` | GPU, 45 runs | `aij_arm4/aij.json` |
+| 2a | `fit_proxy_fleet.py` | GPU, 96 runs (shardable) | `fleet/fleet.jsonl` |
+| 2b | `fit_aij.py` | GPU, 45 runs (shardable) | `aij_arm4/aij.json` |
 | 3a | `fit_regmix.py` | CPU, minutes | `weights_arm2.json` |
 | 3b | `fit_mixing_law.py` | CPU, minutes | `weights_arm3.json`, `mixlaw_t.json` |
 | 4 | `cluster_tlite.py` | CPU, seconds | `clusters.json` |
-| 5 | `fit_aij.py --cluster-map` | GPU, 10 runs | `aij_arm5/aij.json` |
+| 5 | `fit_aij.py --cluster-map` | GPU, 10 runs (shardable) | `aij_arm5/aij.json` |
 | 6 | `train_mixture.py` ×15 | GPU, ~490 GPU-h | `runs/*/val_log.jsonl` |
 | 7 | `analyze.py` | CPU | `analysis.json` + verdict |
 
@@ -48,6 +48,11 @@ output file.
 
 Step 5 depends on step 4, which depends on 3b, which depends on 2a. Step 2b is independent
 and can run alongside 2a.
+
+Steps 2a, 2b and 5 take `--shard I --num-shards N` to spread their runs over N GPUs, with
+a `--assemble-only` pass afterwards to merge the per-shard logs into the file the next step
+reads. `farmshare_phase2_fit.sh` wires that up as Slurm arrays; sharding takes the fitting
+phase from roughly 20 h of sequential wall clock down to a couple of hours.
 
 ## Status
 

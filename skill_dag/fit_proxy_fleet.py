@@ -20,15 +20,23 @@ regressor is extrapolating.
 
 Resumable: one line per completed run in fleet.jsonl; re-runs skip what is done.
 
+Shardable: --shard I --num-shards N runs only every Nth run, so the 96 runs can be spread
+over N GPUs instead of taken sequentially. Each worker appends to its own
+fleet.shardNN.jsonl and the last one to finish folds them into the canonical fleet.jsonl
+that fit_regmix.py and fit_mixing_law.py read; --assemble-only does that merge on its own.
+
 Usage:
   python fit_proxy_fleet.py --out fleet --mixtures 32 --sizes 50 75 100
+  python fit_proxy_fleet.py --out fleet --shard 3 --num-shards 8   # one worker of eight
+  python fit_proxy_fleet.py --out fleet --assemble-only            # after the array finishes
 """
 import argparse, json, os, time
 
 import numpy as np
 import torch
 
-from fit_aij import make_proxy
+from fit_aij import (add_shard_args, make_proxy, merge_logs, read_logs, select_shard,
+                     shard_log_path, total_cost, write_json_atomic)
 from train_mixture import BASE_MODEL, BASE_REVISION, DomainPools, val_loss
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -114,6 +122,7 @@ def main():
                     help="enable gradient checkpointing; off by default because the proxies "
                          "are small enough not to need it")
     ap.add_argument("--mixture-seed", type=int, default=7)
+    add_shard_args(ap)
     args = ap.parse_args()
 
     for s in args.sizes:
@@ -125,46 +134,64 @@ def main():
     pools = DomainPools(args.data, seed=args.data_seed)
     mixes = sample_mixtures(args.mixtures, pools.natural, pools.domains,
                             args.alpha_scale, args.mixture_seed)
-    json.dump({"mixtures": mixes, "domains": pools.domains,
-               "alpha_scale": args.alpha_scale, "mixture_seed": args.mixture_seed,
-               "note": "index 0 is the natural mix; all others Dirichlet around it"},
-              open(os.path.join(args.out, "mixtures.json"), "w"), indent=2)
+    # every shard derives the same mixtures from the same seed, so this is written
+    # atomically rather than guarded -- concurrent plain writes would tear the file
+    write_json_atomic({"mixtures": mixes, "domains": pools.domains,
+                       "alpha_scale": args.alpha_scale,
+                       "mixture_seed": args.mixture_seed,
+                       "note": "index 0 is the natural mix; all others Dirichlet around it"},
+                      os.path.join(args.out, "mixtures.json"))
 
     tasks = [(mi, s) for mi in range(len(mixes)) for s in args.sizes]
-    log_p = os.path.join(args.out, "fleet.jsonl")
-    done = set()
-    if os.path.exists(log_p):
-        for line in open(log_p):
-            r = json.loads(line)
-            done.add((r["mixture_index"], r["size_m"]))
-        print(f"resuming: {len(done)}/{len(tasks)} runs already done")
+    log_key = lambda r: (r["mixture_index"], r["size_m"])
+    done = read_logs(args.out, "fleet", log_key)
 
     print(f"fleet: {len(mixes)} mixtures x {len(args.sizes)} sizes = {len(tasks)} runs "
-          f"@ {args.fleet_tokens:,} tokens each\n")
+          f"@ {args.fleet_tokens:,} tokens each")
+    if args.num_shards > 1:
+        print(f"shard {args.shard}/{args.num_shards}")
+    if done:
+        print(f"resuming: {len(done)}/{len(tasks)} runs already done")
+    print()
 
-    fit_seconds, fit_tokens = 0.0, 0
-    for n, (mi, s) in enumerate(tasks, 1):
-        if (mi, s) in done:
-            continue
-        hidden, layers = SIZE_PRESETS[s]
-        top = sorted(mixes[mi].items(), key=lambda kv: -kv[1])[:3]
-        print(f"[{n}/{len(tasks)}] mix{mi} @{s}M  top: "
-              + ", ".join(f"{d}={w:.2f}" for d, w in top), flush=True)
-        curve, cost = train_curve(mixes[mi], hidden, layers, pools, args, dev)
-        with open(log_p, "a") as f:
-            f.write(json.dumps({"mixture_index": mi, "size_m": s,
-                                "hidden": hidden, "layers": layers,
-                                "weights": mixes[mi], "curve": curve,
-                                "cost": cost}) + "\n")
-        fit_seconds += cost["seconds"]; fit_tokens += cost["tokens"]
-        print(f"    final mean val loss {curve[-1]['val_loss']['_mean']:.4f} "
-              f"({cost['seconds']:.0f}s, {cost['params']/1e6:.0f}M params)", flush=True)
+    if not args.assemble_only:
+        mine = select_shard(tasks, args.shard, args.num_shards)
+        log_p = shard_log_path(args.out, "fleet", args.shard, args.num_shards)
+        for n, (mi, s) in enumerate(mine, 1):
+            if (mi, s) in done:
+                continue
+            hidden, layers = SIZE_PRESETS[s]
+            top = sorted(mixes[mi].items(), key=lambda kv: -kv[1])[:3]
+            print(f"[{n}/{len(mine)}] mix{mi} @{s}M  top: "
+                  + ", ".join(f"{d}={w:.2f}" for d, w in top), flush=True)
+            curve, cost = train_curve(mixes[mi], hidden, layers, pools, args, dev)
+            rec = {"mixture_index": mi, "size_m": s, "hidden": hidden, "layers": layers,
+                   "weights": mixes[mi], "curve": curve, "cost": cost}
+            with open(log_p, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+            done[(mi, s)] = rec
+            print(f"    final mean val loss {curve[-1]['val_loss']['_mean']:.4f} "
+                  f"({cost['seconds']:.0f}s, {cost['params']/1e6:.0f}M params)", flush=True)
+        done = read_logs(args.out, "fleet", log_key)   # pick up sibling shards
 
-    json.dump({"fitting_compute": {"seconds": round(fit_seconds, 1),
-                                   "tokens": fit_tokens,
-                                   "gpu_hours": round(fit_seconds / 3600, 2)},
-               "n_runs": len(tasks), "config": vars(args)},
-              open(os.path.join(args.out, "fleet_cost.json"), "w"), indent=2)
+    # the regressors need the whole grid, so a shard that finishes early leaves the
+    # canonical fleet.jsonl alone rather than publishing a partial one
+    missing = [t for t in tasks if t not in done]
+    if missing:
+        print(f"\n{len(done)}/{len(tasks)} runs done, {len(missing)} outstanding "
+              f"(next: mix{missing[0][0]} @{missing[0][1]}M).")
+        print(f"Run --assemble-only once the rest finish to write {args.out}/fleet.jsonl.")
+        return
+    sources = merge_logs(args.out, "fleet", done)
+
+    # summed over every run, including ones done in earlier or sibling jobs, so the
+    # preregistered fitting-cost comparison is unaffected by how the work was split
+    fit_seconds, fit_tokens = total_cost(done.values())
+    write_json_atomic({"fitting_compute": {"seconds": fit_seconds, "tokens": fit_tokens,
+                                           "gpu_hours": round(fit_seconds / 3600, 2)},
+                       "n_runs": len(tasks), "config": vars(args),
+                       "shard_logs": sources},
+                      os.path.join(args.out, "fleet_cost.json"))
     print(f"\nfleet complete: {len(tasks)} runs, {fit_seconds/3600:.2f} GPU-h")
     print(f"-> {args.out}/fleet.jsonl  (read by fit_regmix.py and fit_mixing_law.py)")
 
