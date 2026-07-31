@@ -39,8 +39,12 @@ hf download allenai/OLMo-1B-hf --revision step1000-tokens4B \
   --local-dir $HOME/base/olmo-1b-step1000
 ```
 
-then pass `--model $HOME/base/olmo-1b-step1000` to every `train_mixture.py` /
-`fit_*.py` call.
+then pass `--model $HOME/base/olmo-1b-step1000` to every `train_mixture.py` / `fit_*.py`
+call, and `--base $HOME/base/olmo-1b-step1000` to `eval_benchmarks.py` (it takes `--base`
+rather than `--model`, since it also uses the path as the tokenizer source).
+
+If `hf` is not found, your `huggingface_hub` predates the renamed CLI — either upgrade it
+or use `huggingface-cli download` with the same arguments.
 
 ## Phase 0 — build the token pools (CPU, no GPU)
 

@@ -21,8 +21,10 @@ lightgbm>=4.0.0
 # always written regardless, so this is not needed for a valid run.
 wandb>=0.16.0
 
-# Needed only for the one-time base-model snapshot in RUNBOOK.md step 1.
-huggingface_hub[cli]>=0.23.0
+# Needed only for the one-time base-model snapshot in RUNBOOK.md step 1, and only if the
+# compute nodes are offline. Pinned high enough that the `hf` command the runbook uses
+# exists; older releases ship it as `huggingface-cli` instead.
+huggingface_hub[cli]>=0.34.0
 
 # eval_benchmarks.py only. The benchmark pass is a secondary, descriptive measure that
 # nothing in the preregistered decision rule depends on, so the pipeline is valid without
