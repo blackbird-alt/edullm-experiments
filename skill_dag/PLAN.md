@@ -196,6 +196,12 @@ should be read first — it can null the experiment by construction.
    compute against 490 GPU-h — and it is the one addition that would speak to the doc's own
    stated gap. DataDecide supplies the task list and shows that character-normalised
    likelihood metrics carry signal at small scale where raw accuracy does not.
+   *Now built:* `eval_benchmarks.py` scores nine OLMES tasks by length-normalised
+   likelihood and reports each task's chance rate beside the result. It is deliberately
+   wired as a secondary measure that feeds nothing in `analyze.py`, so the remaining
+   decision is only whether to name it in the prereg as a reported-but-not-decisive
+   outcome. Leaving it out of the prereg and running it anyway would make it a post-hoc
+   measure, which is the failure mode worth avoiding here.
 17. **What the adaptive arms start from is unspecified, and it changes what arms 4/5 test.**
   The doc says arms 4 and 5 "select optimal domain weight to start, and then adjust the
    weights 5 times throughout pre-training according to the skill-it formula." It never says
@@ -471,6 +477,13 @@ Operational layer (written, cluster-untested):
 - `requirements.txt` — pinned floors; torch must be installed first against the cluster's
 CUDA. LightGBM is listed but optional, since `fit_regmix.py` falls back and records which
 regressor ran.
+- `eval_benchmarks.py` — optional OLMES-style pass over the finished runs: nine multiple-
+choice tasks ranked by length-normalised log likelihood, four metrics per task (accuracy,
+per-char accuracy, and two continuous correct-probability measures) reported against each
+task's chance rate. Inference only, feeds nothing in `analyze.py`. MMLU excluded and
+declared, because OLMES scores it few-shot and these models have no in-context-learning
+ability to measure. Scoring verified offline against a controlled model: continuation-only
+slicing, per-token accumulation, padding invariance, and every task's gold index.
 - `farmshare_phase0_prep.sh` — CPU: estimate table, then build the pools.
 - `farmshare_phase1_smoke.sh` — the short GPU run, including a resume round-trip check.
 - `farmshare_phase2_fit.sh` — submitter that wires the real dependency graph: fleet and

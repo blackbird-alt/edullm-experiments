@@ -23,3 +23,8 @@ wandb>=0.16.0
 
 # Needed only for the one-time base-model snapshot in RUNBOOK.md step 1.
 huggingface_hub[cli]>=0.23.0
+
+# eval_benchmarks.py only. The benchmark pass is a secondary, descriptive measure that
+# nothing in the preregistered decision rule depends on, so the pipeline is valid without
+# this. Fetch the task data on a login node (--download-only) before the GPU job.
+datasets>=2.18.0

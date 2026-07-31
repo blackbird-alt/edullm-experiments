@@ -156,6 +156,37 @@ python analyze.py --runs "runs/arm*" --margin 0.05 \
 `--margin` is the preregistered non-inferiority threshold. Use the number in PREREG.md; do
 not pick it here.
 
+## Phase 5 — benchmark pass (GPU, inference only, optional)
+
+Secondary and descriptive. The preregistered verdict comes from Phase 4 and nothing here
+feeds it. It exists because held-out loss on the nine training domains cannot address the
+source doc's claim about benchmark scores (review item 16), and because at inference only
+it is free next to 490 GPU-h.
+
+Datasets first, **on a login node** — compute nodes are usually offline:
+
+```bash
+python eval_benchmarks.py --download-only
+```
+
+Then on a GPU node:
+
+```bash
+python eval_benchmarks.py --runs "runs/arm*" --base-ref --out bench_summary.json
+```
+
+`--base-ref` also scores the untrained base revision, which is the reference that tells you
+whether 2B tokens moved these benchmarks at all. Each run gets its own `bench.json` and is
+skipped on re-runs unless you pass `--force`. Use `--limit 200` for a shakedown; those
+numbers are not results.
+
+Expect accuracy at or near chance. That is the honest expected outcome for 1B parameters
+and 2B tokens, which is why `acc_per_char` and the continuous `correct_prob_per_char` are
+reported next to each task's chance rate. **Do not read a two-point accuracy gap as a
+finding.** If the continuous metrics also fail to separate arms, the conclusion is that
+this scale cannot resolve benchmark differences — worth reporting, and not a licence to
+switch DV after the fact.
+
 ## Do not "fix" these
 
 - **Constant LR, no decay.** Decay would down-weight late-arriving data — in adaptive mode

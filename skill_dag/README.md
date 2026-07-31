@@ -42,9 +42,16 @@ output file.
 | 5 | `fit_aij.py --cluster-map` | GPU, 10 runs (shardable) | `aij_arm5/aij.json` |
 | 6 | `train_mixture.py` ×15 | GPU, ~490 GPU-h | `runs/*/val_log.jsonl` |
 | 7 | `analyze.py` | CPU | `analysis.json` + verdict |
+| 8 | `eval_benchmarks.py` | GPU, inference only | `bench_summary.json` (secondary) |
 
 `extrapolate.py` is a shared library (power-law fits and support guards) imported by steps
 3a and 3b, not run directly.
+
+Step 8 is optional and does not feed step 7. It exists because the preregistered DV is
+held-out loss on the same nine domains the models trained on, which cannot speak to the
+source doc's claim about benchmark scores (review item 16). It is inference only, so it is
+negligible against the 490 GPU-h of training. Fetch its datasets on a login node first with
+`--download-only`.
 
 Step 5 depends on step 4, which depends on 3b, which depends on 2a. Step 2b is independent
 and can run alongside 2a.
@@ -56,7 +63,7 @@ phase from roughly 20 h of sequential wall clock down to a couple of hours.
 
 ## Status
 
-- [x] All 9 scripts written; interfaces verified producer → consumer
+- [x] All 10 scripts written; interfaces verified producer → consumer
 - [x] Logic verified against planted ground truth (power law recovers E=2.0 at r²=0.999999;
       both fitters recover a planted optimum; clustering recovers planted structure;
       analysis recovers a planted 3× advantage)
