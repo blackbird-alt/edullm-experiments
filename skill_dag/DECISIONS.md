@@ -8,32 +8,27 @@ were already open. Item C is the one that can quietly invalidate the whole exper
 
 ---
 
-## A. Hardware and partition — operational, decide first
+## A. Hardware — settled, just needs three values
 
-**Recommendation: the group partition with the 4 H100s.**
+The 4 H100s on the group partition. Nothing else comes close: a whole 27-hour run fits in
+one job, so there is no chunking, no preemption and no queue, which puts the main phase at
+**~4.3 days** (~3.3 with gradient checkpointing off). The public-partition fallbacks are
+~4 days on a preemptible H200, ~13 on the L40S ORCD gives out by default, and ~27 if
+you are stuck with 6-hour jobs.
 
-| where | wall clock, main phase | caveats |
-|---|---|---|
-| **4 owned H100s** | **~4.3 days** (~3.3 without gradient checkpointing) | one job per run, no queue, no preemption |
-| `mit_preemptable`, H200 | ~4 days | 4 GPUs, jobs killed at any time, hours of queue |
-| `mit_preemptable`, L40S | ~13 days | the ORCD default GPU; 2 chunks per run |
-| `mit_normal_gpu`, L40S | ~27 days | 6 h cap and 2 GPUs means ~210 queue waits |
+**What we need from you**, all from `scontrol show partition <name>`:
 
-Owned H100s win on every axis: a whole 27-hour run fits in one job, so there is no
-chunking, no preemption risk, and the 4.3 days is a real number rather than a floor that
-queue time inflates.
+1. the partition name
+2. its real time limit
+3. how many of the 4 H100s are actually yours rather than shared with the group
 
 ```bash
-PARTITION=pi_yourgroup WALL=7-00:00:00 CONC=4 GPU=h100 bash orcd_phase3_main.sh
+PARTITION=pi_yourgroup WALL=7-00:00:00 CONC=4 bash orcd_phase3_main.sh
 ```
 
-**What we need from you:** the partition name, its actual time limit
-(`scontrol show partition <name>`), and whether the 4 H100s are exclusively yours or
-shared with the group. If shared, lower `CONC`.
-
-The code handles all four rows — it chunks and resubmits when a run cannot fit in one job,
-and switches from `-G h100:1` to `--gres=gpu:1` off the public partitions. This decision
-only changes how long you wait.
+`CONC` is how many runs go at once — lower it if the cards are shared. The launcher
+derives its chunk length from `WALL` and falls back to chunk-and-resubmit if a run cannot
+finish in one job, so a wrong guess costs time rather than correctness.
 
 ---
 

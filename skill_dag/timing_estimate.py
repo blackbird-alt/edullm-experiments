@@ -15,13 +15,13 @@ N_PROXY = 0.075e9   # average proxy size across the 50/75/100M fleet
 D_PROBE = 200e6
 
 # dense BF16 tensor-core peak, and a realistic sustained fraction of it for a ~1B
-# dense transformer. L40S is derated: 864 GB/s of memory bandwidth against the
-# A100's 2039 makes it bandwidth-bound well before it is compute-bound.
+# dense transformer. L40S is derated: 864 GB/s of memory bandwidth against the H100's
+# 3350 makes it bandwidth-bound well before it is compute-bound. It is kept here only
+# because it is what the ORCD public partitions hand out by default, so it bounds the
+# fallback if the group nodes are unavailable.
 GPUS = {
-    "L40S  (44GB, default, 252 in mit_normal_gpu)": (181e12, 0.35),
-    "A100  (preemptable only)":                     (312e12, 0.40),
-    "H100  (80GB, 4 in mit_normal_gpu)":            (495e12, 0.40),
-    "H200  (140GB, 88 in mit_normal_gpu)":          (495e12, 0.40),
+    "H100 (80GB, the group partition)":   (495e12, 0.40),
+    "L40S (public-partition fallback)":   (181e12, 0.35),
 }
 
 print("Per main run = 2B tokens on a 1.18B model.")
@@ -47,22 +47,18 @@ for name, (peak, mfu) in GPUS.items():
     totals[name] = (h_on, main + fit)
     print(f"{name:46s} {h_on:7.1f} {h_off:7.1f} {main:7.0f} {fit:6.0f} {main+fit:7.0f}")
 
-print("\n\nWALL CLOCK, given ORCD partition limits")
-print("  mit_normal_gpu : 6 h max, 2 GPUs concurrent")
-print("  mit_preemptable: 48 h max, 4 GPUs concurrent, jobs can be killed")
-print("  pi_<group>     : a PI/group partition, typically 7-14 days and no preemption\n")
-for part, cap, ngpu in [("mit_normal_gpu", 6, 2), ("mit_preemptable", 48, 4),
-                        ("pi_<group>, 4 owned GPUs", 7 * 24, 4)]:
+print("\n\nWALL CLOCK for the main phase\n")
+for part, cap, ngpu in [("group partition, 4 owned H100s (7-day limit)", 7 * 24, 4),
+                        ("mit_preemptable fallback (48 h, 4 GPUs, preemptible)", 48, 4),
+                        ("mit_normal_gpu fallback (6 h, 2 GPUs)", 6, 2)]:
     print(f"  --- {part} ---")
     for name, (h_run, total) in totals.items():
-        if part == "mit_normal_gpu" and "A100" in name:
-            continue                        # A100 is preemptable-only
         chunks = -(-h_run // cap)
         days = total / ngpu / 24
-        print(f"    {name:46s} {chunks:3.0f} chunks/run  {days:6.1f} days of compute")
+        print(f"    {name:36s} {chunks:3.0f} chunks/run  {days:6.1f} days of compute")
     print()
 
-print("Days above are pure compute and exclude queue wait, which is charged once per")
-print("chunk. On mit_normal_gpu at 14 chunks/run that is 210 separate queue waits, which")
-print("is why the public-partition L40S row is worse in practice than it looks here. On an")
-print("owned partition there is no queue and one chunk per run, so the number is real.")
+print("Days are pure compute and exclude queue wait, which is charged once per chunk.")
+print("On the owned partition there is no queue and one chunk per run, so that number is")
+print("real. On mit_normal_gpu at 14 chunks/run it is 210 separate queue waits, so that")
+print("row is considerably worse in practice than it looks here.")

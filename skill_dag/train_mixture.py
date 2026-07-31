@@ -270,8 +270,8 @@ def main():
     ap.add_argument("--ckpt-every-tokens", type=int, default=100_000_000,
                     help="resume-checkpoint cadence in tokens (0 disables)")
     # A token cadence alone is not enough on a cluster with short job windows: 100M tokens
-    # is over three hours on an L40S, so a 6-hour job would checkpoint once and a
-    # preemption could cost hours. Whichever limit comes first triggers the save.
+    # is well over an hour even on fast hardware, so a short job would checkpoint once or
+    # not at all and a preemption could cost hours. Whichever limit comes first saves.
     ap.add_argument("--ckpt-every-seconds", type=int, default=1800,
                     help="resume-checkpoint cadence in seconds (0 disables)")
     ap.add_argument("--max-seconds", type=int, default=0,

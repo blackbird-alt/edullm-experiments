@@ -1,17 +1,17 @@
 #!/bin/bash
 # Phase 3: the 15 main runs.
-#   bash orcd_phase3_main.sh                              # submit (preemptable, L40S)
-#   GPU=h200 bash orcd_phase3_main.sh                     # ~3x faster per run
-#   PARTITION=mit_normal_gpu GPU=h200 bash orcd_phase3_main.sh
+#   PARTITION=pi_yourgroup WALL=7-00:00:00 CONC=4 bash orcd_phase3_main.sh
+#   bash orcd_phase3_main.sh                    # public fallback: mit_preemptable
 #
 # Run this with `bash`, not `sbatch`. It submits itself as an array and each task
 # resubmits itself until its run finishes.
 #
-# WHY THE CHAIN: no ORCD public partition can hold a whole run. One 2B-token run on a
-# 1.18B model is roughly 83 GPU-h on an L40S or 27 on an H200, against a 6 h cap on
-# mit_normal_gpu and 48 h on mit_preemptable. So each task trains up to --max-seconds,
-# checkpoints, exits, and resubmits itself. train_mixture.py writes run_config.json only
-# on completion, which is how a task knows whether it is done.
+# WHY THE CHAIN: one 2B-token run on a 1.18B model is ~27 GPU-h on an H100, which fits in
+# a single job on a group partition but in neither ORCD public window (6 h on
+# mit_normal_gpu, 48 h on mit_preemptable). So each task trains up to --max-seconds,
+# checkpoints, exits, and resubmits itself. On owned nodes with a multi-day limit it
+# should never need to. train_mixture.py writes run_config.json only on completion, which
+# is how a task knows whether it is done.
 #
 # Preemption is handled separately: --requeue lets Slurm restart a preempted task, and
 # --signal=USR1@180 gives the trainer three minutes to checkpoint before it is killed.
@@ -22,7 +22,7 @@ set -e
 cd "$(dirname "$0")"
 
 PARTITION=${PARTITION:-mit_preemptable}
-GPU=${GPU:-l40s}
+GPU=${GPU:-h100}                      # only used on the public partitions, which take -G
 DATA=${DATA:-$HOME/orcd/scratch/skilldag/dolma_domains}
 RUNS=${RUNS:-$HOME/orcd/scratch/skilldag/runs}
 BUDGET=${BUDGET:-2000000000}          # tokens per run -- [SET BEFORE LAUNCH] in PREREG.md

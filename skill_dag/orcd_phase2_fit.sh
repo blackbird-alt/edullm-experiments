@@ -10,13 +10,12 @@
 #   arm4 array (45 runs, GPU) --> arm4 merge (CPU)                           v
 #     (independent; feeds nothing here)          arm5 array (10 runs, GPU) --> arm5 merge
 #
-# Each probe is a 50-100M proxy on 200M tokens: roughly 30 min on an L40S, 10 on an
-# H200. So even the 6 h cap on mit_normal_gpu fits ~12 probes per job, and the scripts
-# resume at probe granularity -- a task killed by the time limit loses at most the one
+# Each probe is a 50-100M proxy on 200M tokens: roughly 10 min on an H100. The scripts
+# resume at probe granularity, so a task killed by a time limit loses at most the one
 # probe it was in the middle of. Resubmit the same command to fill any gaps.
 #
-# NSHARDS is how many GPUs to spread each array over. mit_normal_gpu allows 2 at once
-# and mit_preemptable 4, so setting it higher just queues; it does not break anything.
+# NSHARDS is how many GPUs to spread each array over. Setting it above the number you can
+# actually hold just queues the rest; it does not break anything.
 #
 # DO NOT RUN until the review questions in PLAN.md are settled. Item 13 in particular:
 # the A_ij probe holds total tokens fixed rather than j's, which biases every entry
@@ -35,7 +34,7 @@ if [ "${I_HAVE_SETTLED_ITEM_13}" != "yes" ]; then
 fi
 
 PARTITION=${PARTITION:-mit_preemptable}
-GPU=${GPU:-l40s}
+GPU=${GPU:-h100}                      # only used on the public partitions, which take -G
 NSHARDS=${NSHARDS:-4}
 DATA=${DATA:-$HOME/orcd/scratch/skilldag/dolma_domains}
 

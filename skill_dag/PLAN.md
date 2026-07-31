@@ -409,11 +409,11 @@ than 6ND — 630 A100-hours, not 490. It is on because activation memory at batc
 was never measured on real hardware. If Phase 1 shows the model fits without it, turning
 it off is the one cost saving that changes nothing scientific.
 
-**"A100-equivalent" is doing real work in that sentence.** On the L40S that MIT ORCD hands
-out by default, the same 15 runs are ~1240 GPU-h; on an H100 or H200, ~400. A factor of
-three sits between the cheapest and most expensive GPU the same cluster will give you.
-See [RUNBOOK.md](RUNBOOK.md) for the per-GPU table and the ORCD partition limits, which
-turn out to constrain the schedule more than the GPU-hours do.
+**"A100-equivalent" is doing real work in that sentence.** The experiment is planned for 4
+H100s on an MIT ORCD group partition, where the 15 runs come to ~400 GPU-h and about 4.3
+days of wall clock. The same runs on the L40S that ORCD hands out by default would be
+~1240 GPU-h. See [RUNBOOK.md](RUNBOOK.md) for the current numbers, or run
+`timing_estimate.py`.
 
 Runs are **independent and embarrassingly parallel** — one process per GPU, no
 multi-GPU training, no interconnect requirement — so the hardware decision affects
@@ -631,5 +631,5 @@ Sanity-check that A_ij is not degenerate (all-zero or all-equal) before trusting
 6. Run the three fitters (`fit_regmix`, `fit_mixing_law`, `cluster_tlite`) — CPU, minutes.
 These produce the actual weight vectors for arms 2, 3 and 5.
 7. File the prereg.
-8. The 15 main runs (~630 A100-h; two to three times that on an L40S), then `analyze.py`.
+8. The 15 main runs (~400 GPU-h on H100s, ~4.3 days across four), then `analyze.py`.
 

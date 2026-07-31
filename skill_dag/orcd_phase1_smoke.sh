@@ -1,7 +1,11 @@
 #!/bin/bash
 # Phase 1: FIRST CONTACT WITH A GPU. ~30 minutes, one GPU.
-#   sbatch orcd_phase1_smoke.sh                 # L40S, the default and most available
-#   GPU=h200 sbatch orcd_phase1_smoke.sh        # if you intend to run the main phase on H200
+#   sbatch -p pi_yourgroup orcd_phase1_smoke.sh    # run it on the hardware Phase 3 will use
+#   sbatch orcd_phase1_smoke.sh                    # public fallback
+#
+# Command-line flags override the #SBATCH directives below, so -p is how you point this
+# at the group partition. Run it on the SAME GPU type as Phase 3 -- the whole purpose is
+# the throughput number, and an L40S and an H100 differ by about 3x.
 #
 # Nothing in this repo has ever run on a GPU or read a real token -- every check so
 # far was synthetic data on CPU. This run answers the questions that cannot be
@@ -11,12 +15,11 @@
 #   - what is the ACTUAL throughput, which sets the whole wall-clock estimate?
 #   - does checkpoint/resume round-trip real model weights?
 #
-# THE THROUGHPUT NUMBER IS THE POINT. Every cost figure in RUNBOOK.md is derived from
-# an assumed fraction of peak FLOPs. On an L40S the difference between the optimistic
-# and pessimistic assumption is roughly three weeks of wall clock. Measure it before
-# anyone commits to Phase 3.
+# THE THROUGHPUT NUMBER IS THE POINT. Every cost figure in RUNBOOK.md is derived from an
+# assumed fraction of peak FLOPs. Measure it before anyone commits to Phase 3.
 #SBATCH --job-name=skilldag-p1-smoke
-#SBATCH --partition=mit_normal_gpu
+#SBATCH --partition=mit_preemptable
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=02:00:00
