@@ -1,11 +1,12 @@
-# RUNBOOK — Skill-DAG, GPU phases
+# RUNBOOK — Skill-DAG, GPU phases (MIT ORCD / Engaging)
 
-For whoever has cluster/GPU access. Phases are ordered by cost and by how much they can
-save you: Phase 1 is a few minutes and tells you whether Phases 2 and 3 are even possible.
+For whoever has cluster access. Phases are ordered by cost and by how much they can save
+you: Phase 1 is under an hour and tells you whether Phases 2 and 3 are even possible.
 
-**Total: ~525 A100-equivalent GPU-hours** (~35 fitting, ~490 main) plus ~93 GB of disk.
-Runs are independent and embarrassingly parallel — one process per GPU, no multi-GPU
-training, no interconnect requirement. Wall clock is 525 ÷ (GPUs available).
+Written for the [Engaging cluster](https://orcd-docs.mit.edu/) public partitions. Runs are
+independent and embarrassingly parallel — one process per GPU, no multi-GPU training, no
+interconnect requirement — so the only things that matter are how many GPUs you can hold
+at once and how long a single job may live.
 
 > **STOP — do not start Phase 2 or 3 yet.** 18 review questions are open in
 > [PLAN.md](PLAN.md) and 9 values are unset in [PREREG.md](PREREG.md). Item 13 in
@@ -15,24 +16,84 @@ training, no interconnect requirement. Wall clock is 525 ÷ (GPUs available).
 > would get a clean-looking null that means nothing. Phase 0 and Phase 1 are safe to run
 > now — they cost almost nothing and are not affected.
 
+## What this costs on ORCD hardware
+
+Per main run: 2B tokens on a 1.18B-parameter model. Gradient checkpointing is on, which
+recomputes the forward pass, so the hardware does roughly 8ND rather than 6ND.
+
+| GPU | availability | h / main run | 15 runs + fitting |
+|---|---|---|---|
+| L40S | default, 252 in `mit_normal_gpu` | ~83 | ~1300 GPU-h |
+| A100 | `mit_preemptable` only | ~42 | ~660 GPU-h |
+| H100 | 4 in `mit_normal_gpu` | ~27 | ~415 GPU-h |
+| H200 | 88 in `mit_normal_gpu`, long queues | ~27 | ~415 GPU-h |
+
+These assume 35–40% of dense bf16 peak. **They are estimates until Phase 1 measures the
+real number** — that is what Phase 1 is for, and on an L40S the spread between an
+optimistic and pessimistic assumption is about three weeks of wall clock.
+
+Partition limits are the binding constraint, not the GPU-hours:
+
+| partition | max time | concurrent GPUs | notes |
+|---|---|---|---|
+| `mit_normal` | 12 h | — | CPU only; Phases 0, 2-fitters, 4 |
+| `mit_normal_gpu` | **6 h** | **2** | L40S / H100 / H200 |
+| `mit_preemptable` | 48 h | 4 | + A100; jobs can be killed at any time |
+
+No single main run fits in either window, so Phase 3 trains in chunks: each task runs up
+to `--max-seconds`, checkpoints, exits, and resubmits itself. Realistic wall clock for
+Phase 3, compute only, excluding queue wait:
+
+| | `mit_normal_gpu` (2 GPUs) | `mit_preemptable` (4 GPUs) |
+|---|---|---|
+| L40S | ~27 days, 14 chunks/run | ~13 days, 2 chunks/run |
+| A100 | n/a | ~7 days, 1 chunk/run |
+| H100 / H200 | ~9 days, 5 chunks/run | ~4 days, 1 chunk/run |
+
+**`mit_preemptable` is the only sensible home for Phase 3**, and it is the default in the
+launcher. Chunking on `mit_normal_gpu` with L40S means ~210 separate queue waits.
+
+If this is too slow, the levers are in "Making it cheaper" at the bottom of this file.
+Reproduce the table any time with `python _timing.py`.
+
 ## Setup (once)
 
-```bash
-module load python 2>/dev/null || true
-python3 -m venv ../.venv_skilldag
-source ../.venv_skilldag/bin/activate
+Put the venv in pool storage, not home: home is 200 GB and you will want it for the
+checkpoints. Pool is 1 TB and survives between jobs (scratch does too, but is purged
+after six months idle).
 
-# Install torch matched to this cluster's CUDA first -- the PyPI default may not
-# match the driver. See https://pytorch.org/get-started/locally/
+```bash
+module load miniforge          # or: module load python/3.11
+python3 -m venv $HOME/orcd/pool/venv_skilldag
+source $HOME/orcd/pool/venv_skilldag/bin/activate
+
+# Install torch matched to the cluster's CUDA first -- the PyPI default may not
+# match the driver. Check with `nvidia-smi` on a GPU node.
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
-No model snapshot step is needed: `allenai/OLMo-1B-hf` is public and ungated, and the
-revision is pinned in code (`BASE_REVISION = "step1000-tokens4B"`). If your nodes have no
-internet, snapshot it on the login node first:
+The launchers all source `$HOME/orcd/pool/venv_skilldag/bin/activate`. If you put the venv
+elsewhere, edit that one line in each.
+
+### Where the data goes
+
+| what | size | where | why |
+|---|---|---|---|
+| token pools | ~93 GB | `$HOME/orcd/scratch/skilldag/dolma_domains` | flash, 1 TB, memory-mapped during training |
+| run outputs + checkpoints | ~10 GB × 15 | `$HOME/orcd/scratch/skilldag/runs` | resume state, rewritten constantly |
+| code, venv, results | small | `$HOME` / pool | home is backed up; scratch and pool are not |
+
+Both default paths are overridable with `DATA=` and `RUNS=`. Neither scratch nor pool is
+backed up — copy `analysis.json`, `bench_summary.json` and the `*_log.jsonl` files into
+home when a phase finishes. Check quota with `cat ~/orcd/.quota`.
+
+No model snapshot step is needed if compute nodes can reach the internet: `allenai/OLMo-1B-hf`
+is public and ungated, and the revision is pinned in code
+(`BASE_REVISION = "step1000-tokens4B"`). Engaging compute nodes generally can, but if yours
+cannot, snapshot it on a login node first:
 
 ```bash
 hf download allenai/OLMo-1B-hf --revision step1000-tokens4B \
@@ -61,37 +122,49 @@ the whole data pipeline is broken.
 Then the real thing (~87 GB download, several hours, parallel across shards, resumable):
 
 ```bash
-sbatch farmshare_phase0_prep.sh
+sbatch orcd_phase0_prep.sh
 ```
 
-Produces `dolma_domains/` — one uint16 `.npy` per domain plus `manifest.json`. Must land on
-a real filesystem, not object storage: `DomainPools` memory-maps these at training time.
+Produces `$HOME/orcd/scratch/skilldag/dolma_domains/` — one uint16 `.npy` per domain plus
+`manifest.json`. Must land on a real filesystem, not object storage: `DomainPools`
+memory-maps these at training time.
 
-## Phase 1 — smoke test (GPU, ~10 minutes) ← **do this one first**
+`mit_normal` caps jobs at 12 h, which may not cover the download plus tokenization on the
+first pass. Completed shards are skipped on restart, so just resubmit until it finishes.
+
+Then export the path for every later phase (or add it to your `.bashrc`):
 
 ```bash
-sbatch farmshare_phase1_smoke.sh
+export DATA=$HOME/orcd/scratch/skilldag/dolma_domains
 ```
 
-A single very short run of the real model on real tokens. This is the highest-value step in
-the whole runbook because **nothing in this repo has ever touched a GPU** — every check so
-far was synthetic data on CPU. It answers: does OLMo-1B load at this revision, does it fit
-in memory at batch 8 × accum 8, what is the actual throughput versus the assumed
-1.2e14 FLOP/s, and does checkpoint/resume round-trip real weights.
+## Phase 1 — smoke test (GPU, under an hour) ← **do this one first**
+
+```bash
+sbatch orcd_phase1_smoke.sh              # L40S
+GPU=h200 sbatch orcd_phase1_smoke.sh     # if you plan to run Phase 3 on H200
+```
+
+A short run of the real model on real tokens. This is the highest-value step in the whole
+runbook because **nothing in this repo has ever touched a GPU** — every check so far was
+synthetic data on CPU. It answers: does OLMo-1B load at this revision, does it fit at
+batch 8 × accum 8, what is the actual throughput, and does checkpoint/resume round-trip
+real weights.
 
 Six of the seven bugs found while building this were only visible when code actually ran.
 Expect this to find more.
 
-**Send back:** `runs/smoke/train_log.jsonl`, `runs/smoke/val_log.jsonl`, and the tokens/sec
-line from the Slurm output. We use throughput to convert the 525 GPU-h estimate into a real
-wall-clock number before anyone commits to Phase 3.
+**Send back:** `phase1_out/` and the `MEASURED:` line from the Slurm output. Every
+wall-clock number in the tables above is derived from an assumed fraction of peak FLOPs;
+that one measurement replaces all of them. Run it on the GPU type you intend to use for
+Phase 3 — L40S and H200 differ by about 3×.
 
-## Phase 2 — fitting runs (GPU, ~35 GPU-h)
+## Phase 2 — fitting runs (GPU, ~20–60 GPU-h depending on GPU)
 
 **Blocked on the review questions above.** Once they are settled:
 
 ```bash
-NSHARDS=8 I_HAVE_SETTLED_ITEM_13=yes bash farmshare_phase2_fit.sh
+NSHARDS=4 I_HAVE_SETTLED_ITEM_13=yes bash orcd_phase2_fit.sh
 ```
 
 Note `bash`, not `sbatch` — this one is a submitter you run on the login node, and it
@@ -100,13 +173,18 @@ refuses to do anything until item 13 is acknowledged. It chains the dependencies
 when the fleet is merged, the two CPU fitters and the clusterer run; then the 10-run arm-5
 probe starts.
 
-`NSHARDS` is how many GPUs to spread each array over. Set it to what you can realistically
-hold at once. Sequentially the fleet is about 20 h of wall clock and arm 4 about 13 h; at
-`NSHARDS=8` both come down to a couple of hours. `NSHARDS=1` gives the old single-process
-behaviour. Arm 5 only has 10 probes, so it is capped at 10 tasks however high you set this.
-Two other knobs: `GPU_TIME` (default `48:00:00`, worth lowering when `NSHARDS` is large so
-the jobs get backfilled sooner) and `THROTTLE` (e.g. `THROTTLE=%4` to cap concurrent array
-tasks on a busy partition).
+`NSHARDS` is how many GPUs to spread each array over. Past the partition's concurrent-GPU
+limit (2 on `mit_normal_gpu`, 4 on `mit_preemptable`) the extra tasks just queue, which is
+harmless. Arm 5 has only 10 probes and is capped at 10 tasks however high you set this.
+
+Each probe is a 50–100M proxy on 200M tokens: roughly 30 min on an L40S, 10 on an H200. So
+the phase fits comfortably in 6 h chunks even on `mit_normal_gpu`:
+
+```bash
+PARTITION=mit_normal_gpu NSHARDS=2 I_HAVE_SETTLED_ITEM_13=yes bash orcd_phase2_fit.sh
+```
+
+`PARTITION`, `GPU` and `THROTTLE` (e.g. `THROTTLE=%2`) are the other knobs.
 
 Each array task runs every Nth probe and appends to its own `*.shardNN.jsonl`; a short CPU
 job afterwards merges those into the canonical `fleet.jsonl` / `probes.jsonl` and writes
@@ -130,7 +208,7 @@ If that prints 0 positive entries, **stop**. Either the probes were too short (r
 item 5) or the token-matching confound (item 13) has swallowed the signal. Both produce an
 all-zero A, both make arms 4 and 5 meaningless, and the fixes are different.
 
-## Phase 3 — the 15 main runs (GPU, ~490 GPU-h)
+## Phase 3 — the 15 main runs (GPU, 400–1300 GPU-h by GPU type)
 
 **Requires the prereg to be filed first.** Program rule: arms and thresholds are registered
 before the real spend.
@@ -142,17 +220,37 @@ defaults to `natural`; set `ADAPTIVE_INIT=weights_arm2.json` to use the other re
 one, record it in the prereg, and do not change it after seeing results.
 
 ```bash
-sbatch farmshare_phase3_main.sh          # Slurm array, 15 independent runs
+bash orcd_phase3_main.sh                              # mit_preemptable, L40S
+GPU=h200 bash orcd_phase3_main.sh                     # ~3x faster per run
+PARTITION=mit_normal_gpu GPU=h200 bash orcd_phase3_main.sh
 ```
 
-All 15 are resume-safe (`--resume` reloads model, optimizer, scheduler, step, token count,
-per-domain cursors, wrap counts, current weights and the reweighting-round boundaries).
-Resubmitting the array re-enters any run that was cut off.
+`bash`, not `sbatch`: the script submits itself as a 15-task array and then **each task
+resubmits itself until its own run finishes**. No main run fits in a single job window on
+any public partition, so each chunk trains up to `--max-seconds`, checkpoints, and exits.
+`train_mixture.py` writes `run_config.json` only on completion, which is how a task knows
+whether it is done; `MAX_CHUNKS` (default 40) stops a runaway loop.
+
+Preemption is handled on two paths that complement each other. `--requeue` lets Slurm
+restart a task that was killed, and it resumes from the last checkpoint. `--signal=USR1@180`
+gives the trainer three minutes' warning, and it checkpoints at the next step boundary
+rather than mid-optimizer-update. Worst case you lose one checkpoint interval, which
+defaults to 30 minutes of wall clock (`--ckpt-every-seconds`).
+
+Progress across all 15:
+
+```bash
+bash orcd_phase3_main.sh --status
+```
+
+Resume is complete state, not just weights: model, optimizer, scheduler, step, token count,
+per-domain read cursors, wrap counts, current weights, and the reweighting-round
+boundaries. Killing and resubmitting is safe at any point.
 
 ## Phase 4 — analysis (CPU)
 
 ```bash
-python analyze.py --runs "runs/arm*" --margin 0.05 \
+python analyze.py --runs "$RUNS/arm*" --margin 0.05 \
   --fitting-costs aij_arm4/aij.json aij_arm5/aij.json fleet/fleet_cost.json \
   --out analysis.json
 ```
@@ -165,18 +263,18 @@ not pick it here.
 Secondary and descriptive. The preregistered verdict comes from Phase 4 and nothing here
 feeds it. It exists because held-out loss on the nine training domains cannot address the
 source doc's claim about benchmark scores (review item 16), and because at inference only
-it is free next to 490 GPU-h.
+it costs a rounding error against the training spend.
 
-Datasets first, **on a login node** — compute nodes are usually offline:
+Datasets first, on a login node, so the GPU job needs no network:
 
 ```bash
 python eval_benchmarks.py --download-only
 ```
 
-Then on a GPU node:
+Then on a GPU node — this fits inside `mit_normal_gpu`'s 6 h window:
 
 ```bash
-python eval_benchmarks.py --runs "runs/arm*" --base-ref --out bench_summary.json
+python eval_benchmarks.py --runs "$RUNS/arm*" --base-ref --out bench_summary.json
 ```
 
 `--base-ref` also scores the untrained base revision, which is the reference that tells you
@@ -190,6 +288,29 @@ reported next to each task's chance rate. **Do not read a two-point accuracy gap
 finding.** If the continuous metrics also fail to separate arms, the conclusion is that
 this scale cannot resolve benchmark differences — worth reporting, and not a licence to
 switch DV after the fact.
+
+## Making it cheaper
+
+In descending order of how much they buy and ascending order of how much they cost you
+scientifically. The first is free; the rest change the experiment and belong in the prereg
+*before* launch, not after seeing a number you dislike.
+
+1. **Turn off gradient checkpointing** — saves ~25%, changes nothing scientific. It is on
+   unconditionally in `train_mixture.py` and is only needed if activations do not fit. A
+   1B model at batch 8 × 2048 needs roughly 25–35 GB of activations, so it is marginal on
+   a 44 GB L40S and comfortable on an 80 GB H100 or 140 GB H200. Phase 1 tells you which.
+   This is the one lever to pull first.
+2. **Use H100/H200 instead of L40S** — 3× faster per run. Costs queue time, and H200s can
+   wait hours. Worth it: 27 GPU-h/run versus 83 dominates any plausible queue penalty.
+3. **Drop to 2 seeds** — saves a third (10 runs instead of 15). Weakens the variance
+   estimate that the non-inferiority test depends on; see PLAN.md item 5 on why 3 was
+   chosen.
+4. **Halve the token budget to 1B** — saves half. This is the most damaging option. At 2B
+   tokens on 1.18B parameters the run is already at a ~2:1 token-to-parameter ratio,
+   far under Chinchilla-optimal, and mixture effects are smaller and noisier the shorter
+   the run. Halving again risks a null that says nothing about the hypothesis.
+
+Anything that changes tokens, seeds, or arms must be settled before Phase 3 starts.
 
 ## Do not "fix" these
 
@@ -209,3 +330,17 @@ Most likely friction is Phase 1, since nothing here is cluster-tested: OOM at th
 batch size, a `transformers` version too old for the OLMo architecture (needs ≥4.40), or
 the revision not resolving. Send the traceback plus `nvidia-smi` output — these are usually
 one-line fixes.
+
+ORCD-specific things that bite:
+
+- **Job rejected for the time limit.** `mit_normal_gpu` allows 6 h, not more. The launchers
+  set this per partition; if you override `WALL` by hand, keep it under the cap.
+- **Requesting too many CPUs silently costs a GPU.** Engaging reserves 16 CPUs per L40S and
+  15 per H200; ask for more and the job may be allocated an extra GPU against your limit.
+  The launchers request 16.
+- **Array stuck pending.** You are at the concurrent-GPU limit (2 or 4). Expected — the
+  chain drains it over time. `squeue -u $USER --start` estimates when.
+- **Rocky 8 versus CentOS 7.** Modules built on the older nodes will not work on
+  `mit_normal*` or `mit_preemptable`. Build the venv on the same OS you run on.
+- **Everything vanished from scratch.** Scratch is purged after six months idle and is not
+  backed up. Copy results to home as each phase finishes.

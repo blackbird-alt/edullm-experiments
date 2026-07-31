@@ -37,7 +37,7 @@ Usage:
   python train_mixture.py --arm arm1_natural --weights natural \
       --reweight-mode fixed --token-budget 5000000000 --out runs/arm1
 """
-import argparse, json, math, os, time
+import argparse, json, math, os, signal, time
 
 import numpy as np
 import torch
@@ -268,9 +268,20 @@ def main():
     ap.add_argument("--n-seeds", type=int, default=1,
                     help="total replicates per arm; pool is divided into this many regions")
     ap.add_argument("--ckpt-every-tokens", type=int, default=100_000_000,
-                    help="resume-checkpoint cadence (0 disables)")
+                    help="resume-checkpoint cadence in tokens (0 disables)")
+    # A token cadence alone is not enough on a cluster with short job windows: 100M tokens
+    # is over three hours on an L40S, so a 6-hour job would checkpoint once and a
+    # preemption could cost hours. Whichever limit comes first triggers the save.
+    ap.add_argument("--ckpt-every-seconds", type=int, default=1800,
+                    help="resume-checkpoint cadence in seconds (0 disables)")
+    ap.add_argument("--max-seconds", type=int, default=0,
+                    help="stop cleanly after this long, checkpointing first. Set it below "
+                         "the Slurm time limit so the run ends on a good checkpoint "
+                         "instead of being killed mid-write. 0 = no limit.")
     ap.add_argument("--resume", action="store_true",
                     help="resume from <out>/ckpt_resume if present")
+    ap.add_argument("--device", default="cuda",
+                    help="cuda, or cpu for a tiny offline dry run of the control flow")
     ap.add_argument("--wandb", default=None)
     args = ap.parse_args()
 
@@ -279,7 +290,7 @@ def main():
 
     torch.manual_seed(args.seed)
     os.makedirs(args.out, exist_ok=True)
-    dev = "cuda"
+    dev = args.device
 
     pools = DomainPools(args.data, val_frac=args.val_frac, seed=args.seed,
                         seed_index=args.seed_index, n_seeds=args.n_seeds)
@@ -352,6 +363,24 @@ def main():
 
     next_ckpt = (trained + args.ckpt_every_tokens) if args.ckpt_every_tokens else float("inf")
     t0 = time.time()
+    next_ckpt_t = (t0 + args.ckpt_every_seconds) if args.ckpt_every_seconds else float("inf")
+    deadline = (t0 + args.max_seconds) if args.max_seconds else float("inf")
+
+    # Slurm sends SIGTERM at the time limit and, with --signal, SIGUSR1 ahead of a
+    # preemption. Catching them lets the step finish and a checkpoint land, instead of
+    # losing everything since the last save. The flag is only read at a step boundary --
+    # checkpointing from inside the handler could write a half-updated optimizer state.
+    stop = {"why": None}
+
+    def _stop(signum, _frame):
+        stop["why"] = signal.Signals(signum).name
+
+    for sig in (signal.SIGTERM, getattr(signal, "SIGUSR1", None)):
+        if sig is not None:
+            try:
+                signal.signal(sig, _stop)
+            except (ValueError, OSError):
+                pass                        # not on the main thread, or unsupported
 
     def progress():
         return {"trained": trained, "step": step, "next_eval": next_eval,
@@ -392,10 +421,23 @@ def main():
                 wb.log({"val/" + k: v for k, v in vl.items()}, step=step)
             next_eval += args.eval_tokens
 
-        if trained >= next_ckpt:
+        if trained >= next_ckpt or time.time() >= next_ckpt_t:
             save_ckpt(ckpt_dir, model, opt, sched, pools, progress())
             print(f"  ckpt@{trained:,} -> {ckpt_dir}", flush=True)
-            next_ckpt += args.ckpt_every_tokens
+            while trained >= next_ckpt:
+                next_ckpt += args.ckpt_every_tokens
+            if args.ckpt_every_seconds:
+                next_ckpt_t = time.time() + args.ckpt_every_seconds
+
+        if stop["why"] or time.time() >= deadline:
+            why = stop["why"] or f"--max-seconds {args.max_seconds}"
+            save_ckpt(ckpt_dir, model, opt, sched, pools, progress())
+            print(f"\nSTOPPING EARLY ({why}) at {trained:,}/{args.token_budget:,} tokens "
+                  f"({100 * trained / args.token_budget:.1f}%).")
+            print(f"Checkpoint written to {ckpt_dir}. Resubmit the same command with "
+                  f"--resume to continue; run_config.json is written only on completion, "
+                  f"so its absence is how a launcher knows this run is unfinished.")
+            return
 
         if args.reweight_mode == "adaptive" and trained >= next_round:
             rnd = int(trained // tokens_per_round)

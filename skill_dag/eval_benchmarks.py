@@ -7,7 +7,7 @@ about benchmarks -- "exactly the same benchmark scores with slightly reduced com
 few pp higher on benchmark scores with equal compute". Held-out loss on the training
 domains cannot speak to that, because it never leaves the training distribution. This adds
 the external measurement, and it costs almost nothing: no gradients, one forward pass per
-answer option, against 490 GPU-h of training.
+answer option, against hundreds of GPU-hours of training.
 
 This is a SECONDARY, DESCRIPTIVE measure. The preregistered decision rule is the loss
 analysis in analyze.py; nothing here feeds it. Reporting a benchmark table is not licence
@@ -30,9 +30,9 @@ most of these. The chance rate is reported alongside every task so that nobody r
 the honest conclusion is that this scale cannot resolve benchmark differences, which is
 itself worth reporting against the doc's claim.
 
-NETWORK: Farmshare compute nodes generally cannot reach the internet. Fetch the datasets
-on a login node first with --download-only; they land in the shared HF cache and the GPU
-job then runs offline.
+NETWORK: if the cluster's compute nodes cannot reach the internet, fetch the datasets on a
+login node first with --download-only; they land in the shared HF cache and the GPU job
+then runs offline.
 
 Usage:
   python eval_benchmarks.py --download-only                     # login node, no GPU

@@ -1,4 +1,12 @@
-# Skill-DAG / Prerequisite Sequencing experiment (P1)
+# Skill-DAG / Prerequisite Sequencing experiment (P1) — ARCHIVED, DO NOT RUN
+
+> Superseded by `skill_dag/`. This attempt did not work: the model learned the number
+> format rather than the arithmetic, then memorised the stream without extractable
+> knowledge, and the hard skills floored below the mastery threshold. Post-mortem in
+> `skill_dag/PLAN.md`. Everything below is kept as a record of what was tried.
+>
+> The `farmshare_*.sh` launchers here target Stanford Farmshare and are **not** the
+> current cluster. The live experiment runs on MIT ORCD via `skill_dag/orcd_*.sh`.
 
 Does prerequisite-ordered training beat random order at equal everything-else?
 Full design + decision rule: [PREREG.md](PREREG.md). Dataset docs:

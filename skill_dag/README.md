@@ -40,17 +40,19 @@ output file.
 | 3b | `fit_mixing_law.py` | CPU, minutes | `weights_arm3.json`, `mixlaw_t.json` |
 | 4 | `cluster_tlite.py` | CPU, seconds | `clusters.json` |
 | 5 | `fit_aij.py --cluster-map` | GPU, 10 runs (shardable) | `aij_arm5/aij.json` |
-| 6 | `train_mixture.py` ×15 | GPU, ~490 GPU-h | `runs/*/val_log.jsonl` |
+| 6 | `train_mixture.py` ×15 | GPU, 400–1300 GPU-h | `runs/*/val_log.jsonl` |
 | 7 | `analyze.py` | CPU | `analysis.json` + verdict |
 | 8 | `eval_benchmarks.py` | GPU, inference only | `bench_summary.json` (secondary) |
 
 `extrapolate.py` is a shared library (power-law fits and support guards) imported by steps
-3a and 3b, not run directly.
+3a and 3b, not run directly. Two support scripts sit outside the pipeline:
+`timing_estimate.py` prints the cost and wall-clock tables for ORCD hardware, and
+`test_resume.py` checks the checkpoint/resume path that step 6 depends on.
 
 Step 8 is optional and does not feed step 7. It exists because the preregistered DV is
 held-out loss on the same nine domains the models trained on, which cannot speak to the
 source doc's claim about benchmark scores (review item 16). It is inference only, so it is
-negligible against the 490 GPU-h of training. Fetch its datasets on a login node first with
+negligible against the training spend. Fetch its datasets on a login node first with
 `--download-only`.
 
 Step 5 depends on step 4, which depends on 3b, which depends on 2a. Step 2b is independent
@@ -58,15 +60,24 @@ and can run alongside 2a.
 
 Steps 2a, 2b and 5 take `--shard I --num-shards N` to spread their runs over N GPUs, with
 a `--assemble-only` pass afterwards to merge the per-shard logs into the file the next step
-reads. `farmshare_phase2_fit.sh` wires that up as Slurm arrays; sharding takes the fitting
-phase from roughly 20 h of sequential wall clock down to a couple of hours.
+reads. `orcd_phase2_fit.sh` wires that up as Slurm arrays; sharding takes the fitting phase
+from roughly a day of sequential wall clock down to a few hours.
+
+The `orcd_phase*.sh` launchers target the [MIT ORCD Engaging](https://orcd-docs.mit.edu/)
+public partitions. The binding constraint there is job length, not GPU-hours: no single
+main run fits in either the 6 h `mit_normal_gpu` window or the 48 h `mit_preemptable` one,
+so step 6 trains in chunks that checkpoint and resubmit themselves. See
+[RUNBOOK.md](RUNBOOK.md) for the cost and wall-clock tables.
 
 ## Status
 
-- [x] All 10 scripts written; interfaces verified producer → consumer
+- [x] All 10 pipeline scripts written; interfaces verified producer → consumer
 - [x] Logic verified against planted ground truth (power law recovers E=2.0 at r²=0.999999;
       both fitters recover a planted optimum; clustering recovers planted structure;
       analysis recovers a planted 3× advantage)
+- [x] Checkpoint/resume verified end to end by `test_resume.py`, which stops a run mid-way,
+      resumes it, and checks it neither restarts from zero nor rereads tokens. Phase 3
+      depends on this: every main run is trained in several chunks.
 - [ ] **Nothing has touched a GPU or a real token.** All verification so far is synthetic
       data on CPU. The smoke test (step 1) is first contact.
 - [ ] 18 review questions open — see PLAN.md. **Item 13 blocks step 2b**: the A_ij probe

@@ -193,7 +193,7 @@ should be read first — it can null the experiment by construction.
    and names this as a place the literature is weak. This plan measures held-out loss on the
    same nine domains and declares external transfer out of scope. Adding an OLMES-style
    benchmark pass at the end of each of the 15 main runs is **inference only** — negligible
-   compute against 490 GPU-h — and it is the one addition that would speak to the doc's own
+   compute against hundreds of GPU-hours of training — and it is the one addition that would speak to the doc's own
    stated gap. DataDecide supplies the task list and shows that character-normalised
    likelihood metrics carry signal at small scale where raw accuracy does not.
    *Now built:* `eval_benchmarks.py` scores nine OLMES tasks by length-normalised
@@ -209,7 +209,7 @@ should be read first — it can null the experiment by construction.
    test Skill-It reweighting alone; or start at **arm 2's fitted optimum**, so they test
    Skill-It *on top of* RegMix. The second makes 4-vs-2 a clean test of "does adapting help
    beyond a good fixed choice," but it also means arms 4/5 inherit the whole 96-run fleet
-   cost and are no longer independent of arm 2. `farmshare_phase3_main.sh` defaults to
+   cost and are no longer independent of arm 2. `orcd_phase3_main.sh` defaults to
    natural and exposes `ADAPTIVE_INIT` for the alternative. This interacts with item 13: if
    A is degenerate the adaptive arms never move, so whichever start is chosen is *also* the
    final answer, and arms 4/5 silently become a duplicate of arm 1 or arm 2.
@@ -388,8 +388,8 @@ small.
 
 ## Compute and storage required
 
-Hardware-agnostic. Figures are A100-equivalent GPU-hours at ~1.2e14 effective bf16
-FLOP/s; scale by whatever is actually available.
+Figures below are A100-equivalent GPU-hours at ~1.2e14 effective bf16 FLOP/s, counting
+6ND per token. Both assumptions are optimistic; see the two corrections after the table.
 
 
 | item                                             | GPU-h    |
@@ -401,13 +401,27 @@ FLOP/s; scale by whatever is actually available.
 | **total**                                        | **~525** |
 
 
-Runs are **independent and embarrassingly parallel** — one process per GPU, no
-multi-GPU training, no interconnect requirement. Wall clock is simply 525 ÷ (GPUs
-available), so the hardware decision affects duration, not total cost.
+Two corrections that matter for planning:
 
-Cutting compute, if needed: 1B tokens/run instead of 2B halves the main-run cost to
-~280 GPU-h total and stays inside Skill-It's demonstrated 1B–3B range. Below that,
-seeds or arms have to go.
+**Gradient checkpointing costs ~33% and is not in the table.** `train_mixture.py` enables
+it unconditionally, which recomputes the forward pass, so the main runs do ~8ND rather
+than 6ND — 630 A100-hours, not 490. It is on because activation memory at batch 8 × 2048
+was never measured on real hardware. If Phase 1 shows the model fits without it, turning
+it off is the one cost saving that changes nothing scientific.
+
+**"A100-equivalent" is doing real work in that sentence.** On the L40S that MIT ORCD hands
+out by default, the same 15 runs are ~1240 GPU-h; on an H100 or H200, ~400. A factor of
+three sits between the cheapest and most expensive GPU the same cluster will give you.
+See [RUNBOOK.md](RUNBOOK.md) for the per-GPU table and the ORCD partition limits, which
+turn out to constrain the schedule more than the GPU-hours do.
+
+Runs are **independent and embarrassingly parallel** — one process per GPU, no
+multi-GPU training, no interconnect requirement — so the hardware decision affects
+duration, not total cost.
+
+Cutting compute, if needed: 1B tokens/run instead of 2B halves the main-run cost and
+stays inside Skill-It's demonstrated 1B–3B range, at the price of a shorter run in which
+mixture effects are smaller and noisier. Below that, seeds or arms have to go.
 
 **Storage: ~93 GB** for the tokenized pool, plus space for checkpoints. Must sit on a
 real filesystem — `DomainPools` memory-maps the token files, so object storage cannot
@@ -450,7 +464,12 @@ never resident in RAM; resumable. Measures natural weights as tokens-per-byte x 
 total bytes.
 - `train_mixture.py` — one trainer for all five arms. Val loss on reserved held-out slices is
 the DV; 5 reweighting rounds; cluster mode for arm 5; disjoint per-seed read offsets;
-checkpoint/resume; pool-exhaustion warnings. Skill-It mirror descent unit-tested.
+checkpoint/resume; pool-exhaustion warnings. Skill-It mirror descent unit-tested. Also
+carries the machinery that lets a run survive a cluster with short job windows:
+`--max-seconds` stops cleanly on a checkpoint, `--ckpt-every-seconds` bounds how much a
+kill can cost regardless of throughput, and SIGTERM/SIGUSR1 are caught so a preempted job
+checkpoints at a step boundary rather than mid-optimizer-update. `--device cpu` runs the
+control flow without a GPU.
 - `fit_aij.py` — arm 4 full pairwise (45 runs at k=9), arm 5 cluster-level (10 runs at K=4).
 Fresh identically-seeded proxy per probe. Records fitting compute separately. Shardable
 across GPUs via `--shard/--num-shards`, with `--assemble-only` to merge.
@@ -484,19 +503,25 @@ task's chance rate. Inference only, feeds nothing in `analyze.py`. MMLU excluded
 declared, because OLMES scores it few-shot and these models have no in-context-learning
 ability to measure. Scoring verified offline against a controlled model: continuation-only
 slicing, per-token accumulation, padding invariance, and every task's gold index.
-- `farmshare_phase0_prep.sh` — CPU: estimate table, then build the pools.
-- `farmshare_phase1_smoke.sh` — the short GPU run, including a resume round-trip check.
-- `farmshare_phase2_fit.sh` — submitter that wires the real dependency graph: fleet and
+- `orcd_phase0_prep.sh` — CPU: estimate table, then build the pools into scratch.
+- `orcd_phase1_smoke.sh` — the short GPU run, including a resume round-trip check, and it
+prints measured tokens/s converted into a projected cost for the whole main phase. That
+measurement is what replaces the estimates in this section.
+- `orcd_phase2_fit.sh` — submitter that wires the real dependency graph: fleet and
 arm-4 probe as parallel Slurm arrays, each followed by a merge job, then the CPU fitters and
-clusterer, then the arm-5 array. `NSHARDS` sets the GPU width; at 8 the fitting phase drops
-from ~20 h of sequential wall clock to a couple of hours. Refuses to run until item 13 is
-acknowledged.
-- `farmshare_phase3_main.sh` — Slurm array over the 15 main runs, resume-safe.
+clusterer, then the arm-5 array. `NSHARDS` sets the GPU width. Refuses to run until item 13
+is acknowledged.
+- `orcd_phase3_main.sh` — self-chaining array over the 15 main runs. No main run fits in
+any ORCD public-partition window (6 h on `mit_normal_gpu`, 48 h on `mit_preemptable`
+against ~27–83 h per run), so each task trains to `--max-seconds`, checkpoints, and
+resubmits itself; `--requeue` plus `--signal=USR1@180` cover preemption. `--status` reports
+progress across all 15.
 
 Every `--flag` in these was machine-checked against the scripts' argparse definitions
-(one real error caught: `--nproc` does not exist, the flag is `--procs`). `.gitattributes`
-pins `*.sh` to LF so a Windows checkout cannot ship a CRLF shebang to the cluster. **Bash
-syntax is unverified** — no bash on the authoring machine.
+(one real error caught: `--nproc` does not exist, the flag is `--procs`), and all four pass
+`bash -n`. `.gitattributes` pins `*.sh` to LF so a Windows checkout cannot ship a CRLF
+shebang to the cluster. **Slurm behaviour itself is unverified** — the directives, partition
+names and limits come from the ORCD docs, not from a submitted job.
 
 **All testing so far has been synthetic data on CPU.** No script has run against a real GPU,
 the real model, or real tokens. What is verified is that the maths recovers known planted
@@ -517,7 +542,11 @@ distinct, state round-trips including RNG, wraps counted at pool end.
 count, per-domain cursors, wrap counts, current weights and the next-eval/next-round
 boundaries; reloads the model from the checkpoint rather than the base revision. Without
 cursors and weights a restart would replay the same tokens and reset the reweighting
-schedule, silently changing the experiment instead of resuming it.
+schedule, silently changing the experiment instead of resuming it. `test_resume.py`
+exercises this against the real `main()` on a stubbed model: it stops a run early, resumes
+it, and asserts that the token count moves forward, the step count moves forward, and the
+pool cursors advance by exactly one batch per accumulation microstep with nothing reread.
+It also checks that re-running a finished run is a no-op, since Phase 3 resubmits tasks.
 - *Not* needed, after checking: a per-domain cap. A single flat target already self-caps —
 wiki and books run out of shards and stop, keeping everything that exists, while the other
 seven stop at target.
@@ -568,7 +597,7 @@ estimator, and it looks exactly like a real one. Nothing else on this list can i
 the experiment so completely or so quietly. The fix costs about 10 extra GPU-h.
 - **The other 17 review questions.** Items 2–4 (batch size, mid-warmup branch point,
 constant LR) and item 11 (bf16 optimiser state) are design decisions, not bugs; no amount
-of code changes them. Getting them wrong wastes the full ~525 GPU-h.
+of code changes them. Getting them wrong wastes the entire main phase.
 - **Items 5 and 12 are the two that DataDecide turned from open questions into arguable
 errors**, and both are about the proxies rather than the main runs. The proxies are trained
 at a token-to-parameter ratio of 2–3 where no one has shown mixture signal exists, and all
@@ -602,5 +631,5 @@ Sanity-check that A_ij is not degenerate (all-zero or all-equal) before trusting
 6. Run the three fitters (`fit_regmix`, `fit_mixing_law`, `cluster_tlite`) — CPU, minutes.
 These produce the actual weight vectors for arms 2, 3 and 5.
 7. File the prereg.
-8. The 15 main runs (~490 GPU-h), then `analyze.py`.
+8. The 15 main runs (~630 A100-h; two to three times that on an L40S), then `analyze.py`.
 
