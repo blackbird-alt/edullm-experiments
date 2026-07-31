@@ -8,8 +8,9 @@ Corpus-lever experiments for the eduLLM program (P1, Corpus Foundry track).
   Five arms (natural, RegMix, Data Mixing Laws, Skill-It A_ij, A_ij + T-LITE
   clustering) over Dolma v1.5. Base: OLMo-1B-hf @ `step1000-tokens4B`. 15 runs.
   **Not yet started** — no data downloaded, no GPU used; 18 review questions open.
-  Design and open questions in `skill_dag/PLAN.md`; to actually run it, start at
-  `skill_dag/RUNBOOK.md`. Launchers target MIT ORCD (Engaging) Slurm partitions.
+  Design and open questions in `skill_dag/PLAN.md`; what has to be decided before
+  launch is in `skill_dag/DECISIONS.md`; to actually run it, `skill_dag/RUNBOOK.md`.
+  Launchers target MIT ORCD (Engaging) Slurm partitions.
 - `base_370m/` — from-scratch training pipeline for a shared ~370M base
   (fallback; current plan uses allenai/OLMo-Ladder-760M-0.5xC, revision pinned
   in the runbook).

@@ -49,9 +49,11 @@ for name, (peak, mfu) in GPUS.items():
 
 print("\n\nWALL CLOCK, given ORCD partition limits")
 print("  mit_normal_gpu : 6 h max, 2 GPUs concurrent")
-print("  mit_preemptable: 48 h max, 4 GPUs concurrent, jobs can be killed\n")
-for part, cap, ngpu in [("mit_normal_gpu", 6, 2), ("mit_preemptable", 48, 4)]:
-    print(f"  --- {part} ({cap} h cap, {ngpu} GPUs) ---")
+print("  mit_preemptable: 48 h max, 4 GPUs concurrent, jobs can be killed")
+print("  pi_<group>     : a PI/group partition, typically 7-14 days and no preemption\n")
+for part, cap, ngpu in [("mit_normal_gpu", 6, 2), ("mit_preemptable", 48, 4),
+                        ("pi_<group>, 4 owned GPUs", 7 * 24, 4)]:
+    print(f"  --- {part} ---")
     for name, (h_run, total) in totals.items():
         if part == "mit_normal_gpu" and "A100" in name:
             continue                        # A100 is preemptable-only
@@ -60,5 +62,7 @@ for part, cap, ngpu in [("mit_normal_gpu", 6, 2), ("mit_preemptable", 48, 4)]:
         print(f"    {name:46s} {chunks:3.0f} chunks/run  {days:6.1f} days of compute")
     print()
 
-print("Days above are pure compute: they exclude queue wait, which is charged once per")
-print("chunk. At 15 runs x 14 chunks that is 210 separate queue waits.")
+print("Days above are pure compute and exclude queue wait, which is charged once per")
+print("chunk. On mit_normal_gpu at 14 chunks/run that is 210 separate queue waits, which")
+print("is why the public-partition L40S row is worse in practice than it looks here. On an")
+print("owned partition there is no queue and one chunk per run, so the number is real.")

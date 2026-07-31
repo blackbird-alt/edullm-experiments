@@ -40,14 +40,25 @@ NSHARDS=${NSHARDS:-4}
 DATA=${DATA:-$HOME/orcd/scratch/skilldag/dolma_domains}
 
 case "$PARTITION" in
-  mit_normal_gpu)  WALL=6:00:00 ;;
-  mit_preemptable) WALL=48:00:00 ;;
+  mit_normal_gpu)  WALL=${WALL:-6:00:00} ;;
+  mit_preemptable) WALL=${WALL:-48:00:00} ;;
+  # PI/group partition: PARTITION=pi_yourgroup WALL=7-00:00:00 GPU=h100
   *)               WALL=${WALL:-12:00:00} ;;
 esac
 # Append e.g. %2 to cap concurrent array tasks; mit_normal_gpu allows 2 GPUs.
 THROTTLE="${THROTTLE:-}"
 
-GPU_ARGS=(--partition="$PARTITION" -G "${GPU}:1" --cpus-per-task=16 --mem=64G
+# Public partitions take -G type:count; group partitions generally expect --gres, and
+# asking them for a GPU type they do not advertise leaves the job pending forever.
+if [ -z "${GPU_REQ:-}" ]; then
+  case "$PARTITION" in
+    mit_normal_gpu|mit_preemptable) GPU_REQ="-G ${GPU}:1" ;;
+    *)                              GPU_REQ="--gres=gpu:1" ;;
+  esac
+fi
+read -ra GPU_REQ_ARR <<< "$GPU_REQ"
+
+GPU_ARGS=(--partition="$PARTITION" "${GPU_REQ_ARR[@]}" --cpus-per-task=16 --mem=64G
           --time="$WALL" --requeue)
 CPU_ARGS=(--partition=mit_normal --cpus-per-task=8 --mem=32G)
 PRE="cd \$SLURM_SUBMIT_DIR; source \$HOME/orcd/pool/venv_skilldag/bin/activate; export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; set -e"
@@ -57,7 +68,7 @@ LAST=$((NSHARDS - 1))
 A5=$((NSHARDS < 10 ? NSHARDS : 10))
 A5_LAST=$((A5 - 1))
 
-echo "partition=$PARTITION gpu=$GPU wall=$WALL shards=$NSHARDS (arm5: $A5)"
+echo "partition=$PARTITION  request='${GPU_REQ}'  wall=$WALL  shards=$NSHARDS (arm5: $A5)"
 echo
 
 # --- 2a: shared proxy fleet for arms 2 and 3 (96 runs) ---

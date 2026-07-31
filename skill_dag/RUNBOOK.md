@@ -8,7 +8,8 @@ independent and embarrassingly parallel — one process per GPU, no multi-GPU tr
 interconnect requirement — so the only things that matter are how many GPUs you can hold
 at once and how long a single job may live.
 
-> **STOP — do not start Phase 2 or 3 yet.** 18 review questions are open in
+> **STOP — do not start Phase 2 or 3 yet.** [DECISIONS.md](DECISIONS.md) lists what has to
+> be settled first and what it costs. 18 review questions are open in
 > [PLAN.md](PLAN.md) and 9 values are unset in [PREREG.md](PREREG.md). Item 13 in
 > particular can silently null the experiment: the A_ij probe currently holds *total*
 > tokens fixed rather than *j's*, which biases every matrix entry negative, and the
@@ -32,29 +33,45 @@ These assume 35–40% of dense bf16 peak. **They are estimates until Phase 1 mea
 real number** — that is what Phase 1 is for, and on an L40S the spread between an
 optimistic and pessimistic assumption is about three weeks of wall clock.
 
-Partition limits are the binding constraint, not the GPU-hours:
+On the public partitions, job length is the binding constraint rather than GPU-hours:
 
 | partition | max time | concurrent GPUs | notes |
 |---|---|---|---|
 | `mit_normal` | 12 h | — | CPU only; Phases 0, 2-fitters, 4 |
 | `mit_normal_gpu` | **6 h** | **2** | L40S / H100 / H200 |
 | `mit_preemptable` | 48 h | 4 | + A100; jobs can be killed at any time |
+| `pi_<group>` | typically 7–14 days | what you own | no preemption, no queue |
 
-No single main run fits in either window, so Phase 3 trains in chunks: each task runs up
-to `--max-seconds`, checkpoints, exits, and resubmits itself. Realistic wall clock for
+No single main run fits in either public window, so Phase 3 trains in chunks: each task
+runs up to `--max-seconds`, checkpoints, exits, and resubmits itself. Wall clock for
 Phase 3, compute only, excluding queue wait:
 
-| | `mit_normal_gpu` (2 GPUs) | `mit_preemptable` (4 GPUs) |
-|---|---|---|
-| L40S | ~27 days, 14 chunks/run | ~13 days, 2 chunks/run |
-| A100 | n/a | ~7 days, 1 chunk/run |
-| H100 / H200 | ~9 days, 5 chunks/run | ~4 days, 1 chunk/run |
+| | `mit_normal_gpu` (2 GPUs) | `mit_preemptable` (4 GPUs) | 4 owned GPUs |
+|---|---|---|---|
+| L40S | ~27 days, 14 chunks/run | ~13 days, 2 chunks/run | ~13 days |
+| A100 | n/a | ~7 days, 1 chunk/run | ~7 days |
+| H100 / H200 | ~9 days, 5 chunks/run | ~4 days, 1 chunk/run | **~4 days** |
 
-**`mit_preemptable` is the only sensible home for Phase 3**, and it is the default in the
-launcher. Chunking on `mit_normal_gpu` with L40S means ~210 separate queue waits.
+**If you have a group partition with dedicated GPUs, use it** — a whole run fits in one
+job, so there is no chunking, no preemption and no queue, and the number above is the real
+one rather than a floor. On 4 owned H100s the main phase is about 4.3 days, or 3.3 with
+gradient checkpointing off (see "Making it cheaper"):
 
-If this is too slow, the levers are in "Making it cheaper" at the bottom of this file.
-Reproduce the table any time with `python _timing.py`.
+```bash
+PARTITION=pi_yourgroup WALL=7-00:00:00 CONC=4 GPU=h100 bash orcd_phase3_main.sh
+```
+
+The launcher derives its chunk length from `WALL`, so raising the limit genuinely
+lengthens the chunks, and it switches from `-G h100:1` to `--gres=gpu:1` off the public
+partitions, since group partitions usually do not advertise GPU types. Override with
+`GPU_REQ=` if yours does.
+
+Falling back to public partitions, `mit_preemptable` is the only sensible home for Phase 3
+and is the launcher default. Chunking on `mit_normal_gpu` with L40S means ~210 separate
+queue waits.
+
+If this is still too slow, the levers are in "Making it cheaper" at the bottom of this
+file. Reproduce every table here with `python timing_estimate.py`.
 
 ## Setup (once)
 
@@ -184,7 +201,16 @@ the phase fits comfortably in 6 h chunks even on `mit_normal_gpu`:
 PARTITION=mit_normal_gpu NSHARDS=2 I_HAVE_SETTLED_ITEM_13=yes bash orcd_phase2_fit.sh
 ```
 
-`PARTITION`, `GPU` and `THROTTLE` (e.g. `THROTTLE=%2`) are the other knobs.
+On a group partition, match `NSHARDS` to the GPUs you own — 4 H100s put this phase at
+about an hour and a half:
+
+```bash
+PARTITION=pi_yourgroup WALL=7-00:00:00 GPU=h100 NSHARDS=4 \
+  I_HAVE_SETTLED_ITEM_13=yes bash orcd_phase2_fit.sh
+```
+
+`GPU_REQ` and `THROTTLE` (e.g. `THROTTLE=%2`) are the other knobs. The CPU fitter and
+merge jobs always go to `mit_normal`, which anyone can use.
 
 Each array task runs every Nth probe and appends to its own `*.shardNN.jsonl`; a short CPU
 job afterwards merges those into the canonical `fleet.jsonl` / `probes.jsonl` and writes
@@ -220,10 +246,16 @@ defaults to `natural`; set `ADAPTIVE_INIT=weights_arm2.json` to use the other re
 one, record it in the prereg, and do not change it after seeing results.
 
 ```bash
-bash orcd_phase3_main.sh                              # mit_preemptable, L40S
+# a group partition with dedicated GPUs -- one job per run, no chunking, no preemption
+PARTITION=pi_yourgroup WALL=7-00:00:00 CONC=4 GPU=h100 bash orcd_phase3_main.sh
+
+bash orcd_phase3_main.sh                              # public fallback: preemptable, L40S
 GPU=h200 bash orcd_phase3_main.sh                     # ~3x faster per run
-PARTITION=mit_normal_gpu GPU=h200 bash orcd_phase3_main.sh
 ```
+
+`CONC` is how many runs go at once — set it to the number of GPUs you actually have, or
+the array will queue 15 tasks against 4 cards. `WALL` must be the partition's real limit;
+`scontrol show partition <name>` prints it.
 
 `bash`, not `sbatch`: the script submits itself as a 15-task array and then **each task
 resubmits itself until its own run finishes**. No main run fits in a single job window on
@@ -295,13 +327,15 @@ In descending order of how much they buy and ascending order of how much they co
 scientifically. The first is free; the rest change the experiment and belong in the prereg
 *before* launch, not after seeing a number you dislike.
 
-1. **Turn off gradient checkpointing** — saves ~25%, changes nothing scientific. It is on
-   unconditionally in `train_mixture.py` and is only needed if activations do not fit. A
-   1B model at batch 8 × 2048 needs roughly 25–35 GB of activations, so it is marginal on
-   a 44 GB L40S and comfortable on an 80 GB H100 or 140 GB H200. Phase 1 tells you which.
-   This is the one lever to pull first.
-2. **Use H100/H200 instead of L40S** — 3× faster per run. Costs queue time, and H200s can
-   wait hours. Worth it: 27 GPU-h/run versus 83 dominates any plausible queue penalty.
+1. **Turn off gradient checkpointing** — saves ~25%, changes nothing scientific, takes
+   deleting one line. It is on unconditionally in `train_mixture.py` and is only needed if
+   activations do not fit. A 1B model at batch 8 × 2048 needs roughly 25–35 GB of
+   activations: marginal on a 44 GB L40S, comfortable on an 80 GB H100 or 140 GB H200.
+   Phase 1 tells you which. On H100s this alone takes the main phase from ~4.3 days to
+   ~3.3. Pull this lever first.
+2. **Use H100/H200 instead of L40S** — 3× faster per run. On public partitions this costs
+   queue time, and H200s can wait hours, but 27 GPU-h/run versus 83 dominates any
+   plausible queue penalty.
 3. **Drop to 2 seeds** — saves a third (10 runs instead of 15). Weakens the variance
    estimate that the non-inferiority test depends on; see PLAN.md item 5 on why 3 was
    chosen.

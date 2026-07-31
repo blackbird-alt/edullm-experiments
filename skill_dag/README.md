@@ -69,6 +69,13 @@ main run fits in either the 6 h `mit_normal_gpu` window or the 48 h `mit_preempt
 so step 6 trains in chunks that checkpoint and resubmit themselves. See
 [RUNBOOK.md](RUNBOOK.md) for the cost and wall-clock tables.
 
+## Before running anything
+
+[DECISIONS.md](DECISIONS.md) collects everything that has to be settled before the first
+real GPU spend — hardware and partition, whether to cut scope, the A_ij confound that
+blocks Phase 2, the open review questions, and the unfilled preregistration. One page, no
+code changes, each item a value to pick.
+
 ## Status
 
 - [x] All 10 pipeline scripts written; interfaces verified producer → consumer

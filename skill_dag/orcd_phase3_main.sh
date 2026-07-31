@@ -27,17 +27,51 @@ DATA=${DATA:-$HOME/orcd/scratch/skilldag/dolma_domains}
 RUNS=${RUNS:-$HOME/orcd/scratch/skilldag/runs}
 BUDGET=${BUDGET:-2000000000}          # tokens per run -- [SET BEFORE LAUNCH] in PREREG.md
 N_SEEDS=${N_SEEDS:-3}
+# Eight evaluations per run, scaled off the budget rather than fixed. analyze.py needs a
+# target to be held for two consecutive evaluations before it counts as crossed, so the
+# number of eval points sets the resolution of the whole comparison. A fixed cadence would
+# quietly halve that resolution the moment someone halves BUDGET.
+EVAL_EVERY=${EVAL_EVERY:-$((BUDGET / 8))}
 MAX_CHUNKS=${MAX_CHUNKS:-40}          # stop a runaway resubmission loop
 
-# Per-partition cap, and how long to actually train before stopping to checkpoint.
-# The margin covers model load, the final checkpoint write, and Slurm's own overhead.
 case "$PARTITION" in
-  mit_normal_gpu)  WALL=6:00:00;  SOFT=19800; CONC=2 ;;   # 5h30m of 6h,  2 GPU limit
-  mit_preemptable) WALL=48:00:00; SOFT=169200; CONC=4 ;;  # 47h   of 48h, 4 GPU limit
-  *)               WALL=${WALL:-12:00:00}; SOFT=${SOFT:-41400}; CONC=${CONC:-4} ;;
+  mit_normal_gpu)  WALL=${WALL:-6:00:00};  CONC=${CONC:-2} ;;
+  mit_preemptable) WALL=${WALL:-48:00:00}; CONC=${CONC:-4} ;;
+  # A PI/group partition: set WALL to its limit and CONC to how many GPUs you own.
+  # e.g. PARTITION=pi_yourgroup WALL=7-00:00:00 CONC=4 GPU=h100
+  *)               WALL=${WALL:-12:00:00}; CONC=${CONC:-4} ;;
 esac
 
-SB_FLAGS=(--partition="$PARTITION" -G "${GPU}:1" --cpus-per-task=16 --mem=64G
+# Train for the job's limit minus a margin for model load, the final checkpoint write and
+# Slurm overhead, then stop cleanly. Derived rather than hardcoded so that raising WALL on
+# a group partition actually lengthens the chunks instead of silently keeping short ones.
+slurm_time_s() {
+  local t=$1 d=0 rest=$1 p
+  case "$t" in *-*) d=${t%%-*}; rest=${t#*-} ;; esac
+  IFS=: read -ra p <<< "$rest"
+  case "${#p[@]}:$t" in
+    1:*-*) echo $(( d * 86400 + 10#${p[0]} * 3600 )) ;;
+    1:*)   echo $(( 10#${p[0]} * 60 )) ;;
+    2:*-*) echo $(( d * 86400 + 10#${p[0]} * 3600 + 10#${p[1]} * 60 )) ;;
+    2:*)   echo $(( 10#${p[0]} * 60 + 10#${p[1]} )) ;;
+    *)     echo $(( d * 86400 + 10#${p[0]} * 3600 + 10#${p[1]} * 60 + 10#${p[2]} )) ;;
+  esac
+}
+MARGIN=${MARGIN:-1200}
+SOFT=${SOFT:-$(( $(slurm_time_s "$WALL") - MARGIN ))}
+[ "$SOFT" -gt 0 ] || { echo "ERROR: WALL=$WALL is shorter than MARGIN=${MARGIN}s."; exit 1; }
+
+# The public partitions document -G type:count. PI/group partitions generally predate that
+# and expect --gres; asking for a type they do not advertise leaves the job pending forever.
+if [ -z "${GPU_REQ:-}" ]; then
+  case "$PARTITION" in
+    mit_normal_gpu|mit_preemptable) GPU_REQ="-G ${GPU}:1" ;;
+    *)                              GPU_REQ="--gres=gpu:1" ;;
+  esac
+fi
+read -ra GPU_REQ_ARR <<< "$GPU_REQ"
+
+SB_FLAGS=(--partition="$PARTITION" "${GPU_REQ_ARR[@]}" --cpus-per-task=16 --mem=64G
           --time="$WALL" --requeue --signal=USR1@180
           --job-name=skilldag-p3 --output=phase3_out/run-%A_%a.out)
 
@@ -74,8 +108,8 @@ if [ -z "$SLURM_JOB_ID" ]; then
     [ -e "$f" ] || { echo "ERROR: missing $f -- run Phase 2 first."; exit 1; }
   done
   [ -d "$DATA" ] || { echo "ERROR: $DATA not found -- run Phase 0 first."; exit 1; }
-  echo "partition=$PARTITION gpu=$GPU wall=$WALL train-for=${SOFT}s concurrency=$CONC"
-  echo "budget=$BUDGET tokens x 5 arms x $N_SEEDS seeds"
+  echo "partition=$PARTITION  request='${GPU_REQ}'  wall=$WALL  train-for=${SOFT}s"
+  echo "budget=$BUDGET tokens, eval every $EVAL_EVERY, 5 arms x $N_SEEDS seeds, $CONC at a time"
   sbatch "${SB_FLAGS[@]}" --array=0-$((5 * N_SEEDS - 1))%${CONC} "$0"
   echo
   echo "Each task resubmits itself until its run completes. Watch: squeue -u \$USER"
@@ -126,7 +160,7 @@ nvidia-smi -L || true
 python train_mixture.py \
   --arm "$ARM" --out "$OUT" --data "$DATA" \
   $EXTRA \
-  --token-budget "$BUDGET" \
+  --token-budget "$BUDGET" --eval-tokens "$EVAL_EVERY" \
   --seed "$SEED_IDX" --seed-index "$SEED_IDX" --n-seeds "$N_SEEDS" \
   --rounds 5 \
   --max-seconds "$SOFT" \
